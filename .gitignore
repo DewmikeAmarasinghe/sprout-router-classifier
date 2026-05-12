@@ -1,0 +1,57 @@
+# --- Byte-compiled / optimized / DLL files ---
+__pycache__/
+*.py[cod]
+*$py.class
+
+# --- C extensions ---
+*.so
+
+# --- Distribution / packaging ---
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- Virtual Environments / Dependencies ---
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.mypy_cache/
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+htmlcov/
+.hypothesis/
+
+# --- IDE/Editor Settings ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- Secrets/Sensitive Data ---
+.env
+.secrets
+keys/
+
+# --- Other/Generated ---
+.ipynb_checkpoints
+*.log
+
+.cursor/
