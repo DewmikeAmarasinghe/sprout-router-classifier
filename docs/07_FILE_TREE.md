@@ -1,210 +1,161 @@
-# 07 — FILE TREE (v4)
+# 07 — File Tree (v7, current)
+
+Project root: `model-router-classifier/`
 
 ```
-sprout-router-classifier/
+model-router-classifier/
 │
-├── 00_MASTER_README.md
-├── 01_ARCHITECTURE.md
-├── 02_DATA_PLAN.md
-├── 03_CLASSICAL_ML_PLAN.md
-├── 04_TRANSFORMERS_PLAN.md
-├── 05_EVALUATION_PLAN.md
-├── 06_EXPERIMENT_TRACKING.md
-├── 07_FILE_TREE.md
-├── 08_WORKFLOW.md
-├── TASKS.md
+├── cli.py                          ← dev tool: preview, dryrun, examples-all, distribution
 │
-├── requirements.txt              ← all pip deps
-├── setup_project.py              ← run once: creates all folders + __init__.py stubs
-├── sync.sh                       ← git push at end of Kaggle session
-│
-│
-├── shared/                       ← imported by every phase, never duplicated
-│   ├── __init__.py
-│   ├── config.py                 ← path resolver: auto-detects Kaggle/Colab/local
-│   │                                get_dataset_path(name), get_experiment_path(name, approach)
-│   │                                discover_datasets() → scans data/datasets/
-│   ├── metrics.py                ← compute_all_metrics(), compute_latency_stats(),
-│   │                                estimate_cost(), print_metrics_table()
-│   ├── rule_engine.py            ← rule_label(text, gazetteer) → 1 or None
-│   │                                unicode detection only — no vocab lists
-│   └── gazetteer.py              ← SLGazetteer(gazetteer_csv, aliases_csv)
-│                                    is_sl_location(text, threshold=85) → bool
-│
-│
-├── launcher/                     ← Gradio UI: triggers all phases from browser
-│   ├── app.py                    ← entry point: python launcher/app.py
-│   ├── ui_utils.py               ← filesystem scanner for all dynamic dropdowns
-│   │                                refresh_datasets(), refresh_classifiers(),
-│   │                                refresh_vectorizers(), refresh_transformers()
-│   └── panels/
-│       ├── panel_data.py         ← Phase 1 controls (sub-step selector, dataset name)
-│       ├── panel_classical.py    ← Phase 3 controls (vec/clf dropdowns, param override)
-│       ├── panel_transformer.py  ← Phase 4 controls (model dropdown, param override)
-│       └── panel_evaluation.py   ← Phase 5 controls (compare, ablation, cost sim)
-│
+├── src/
+│   ├── backend/
+│   │   ├── config/
+│   │   │   ├── keys.py             ← StrEnum: LanguageKey, IndustryKey, ScenarioKey
+│   │   │   ├── settings.py         ← global constants
+│   │   │   ├── language_configs.py ← LANGUAGE_CONFIGS: 5 formats
+│   │   │   ├── industry_configs.py ← INDUSTRY_CONFIGS: 8 industries
+│   │   │   ├── scenario_configs.py ← SCENARIO_CONFIGS: 9 scenarios
+│   │   │   └── distribution.py     ← DISTRIBUTION: 360 cells, fraction table
+│   │   │
+│   │   ├── shared/
+│   │   │   ├── script_detector.py  ← is_pure_script(text) → bool  [THE ONLY RULE]
+│   │   │   ├── metrics.py          ← compute_all_metrics(), time_inference()
+│   │   │   ├── path_resolver.py    ← path helpers, IS_KAGGLE / IS_COLAB detection
+│   │   │   └── settings_manager.py ← SettingsManager singleton (in-memory only)
+│   │   │
+│   │   ├── generation/
+│   │   │   ├── pymodels.py         ← LengthRange, GenerationCell, GenerationBatch
+│   │   │   ├── prompt_factory.py   ← PromptFactory + 4 SectionBuilders
+│   │   │   ├── example_store.py    ← ExampleStore: thread-safe, LengthRange fallback
+│   │   │   ├── examples.json       ← generated once with cli.py examples-all (git-tracked)
+│   │   │   ├── generator.py        ← GeneratorService: parallel cells, multi-turn, backoff
+│   │   │   ├── splitter.py         ← DataSplitter: stratified 80/10/10
+│   │   │   └── pipeline.py         ← DataPipeline: generate → split
+│   │   │
+│   │   ├── training/
+│   │   │   ├── pymodels.py         ← MetricsResult, ExperimentResult ✅
+│   │   │   ├── classical/
+│   │   │   │   ├── config.py       ← VectorizerSpec, ClassifierSpec, ACTIVE_COMBOS ✅
+│   │   │   │   ├── vectorizers.py  ← build_vectorizer() + W2V + spaCy transformers ✅
+│   │   │   │   ├── classifiers.py  ← build_classifier() factory ✅
+│   │   │   │   ├── trainer.py      ← ClassicalMLTrainer ✅
+│   │   │   │   └── hpo.py          ← ClassicalHPORunner [TODO — Phase 5 HPO]
+│   │   │   └── transformers/
+│   │   │       ├── config.py       ← TransformerSpec registry [TODO — Phase 6]
+│   │   │       ├── dataset.py      ← CSV → HuggingFace Dataset + tokenizer [TODO]
+│   │   │       ├── trainer.py      ← TransformerTrainer [TODO]
+│   │   │       ├── hpo.py          ← TransformerHPORunner [TODO]
+│   │   │       └── onnx_exporter.py ← export_to_onnx() [TODO]
+│   │   │
+│   │   ├── evaluation/
+│   │   │   ├── pymodels.py         ← ComparisonRow, AblationResult [TODO — Phase 7]
+│   │   │   ├── comparator.py       ← ModelComparator [TODO]
+│   │   │   ├── ablation.py         ← AblationRunner [TODO]
+│   │   │   ├── cost_simulator.py   ← CostSimulator [TODO]
+│   │   │   └── error_analyzer.py   ← ErrorAnalyzer [TODO]
+│   │   │
+│   │   ├── router/
+│   │   │   ├── pymodels.py         ← RouterPrediction, ThresholdConfig [TODO — Phase 8]
+│   │   │   ├── predictor.py        ← RouterPredictor [TODO]
+│   │   │   └── threshold_tuner.py  ← ThresholdTuner [TODO]
+│   │   │
+│   │   └── api/
+│   │       ├── main.py             ← FastAPI + Gradio at /ui  (no --reload during generation)
+│   │       ├── routes_config.py    ← GET /api/config (read-only)
+│   │       └── routes_generation.py ← prompt preview endpoint
+│   │
+│   └── frontend/
+│       ├── app.py                  ← gr.Blocks: 5 tabs (Generation, EDA, Train, Evaluate, Router)
+│       └── panels/
+│           ├── panel_generation.py ← Generation tab ✅
+│           ├── panel_eda.py        ← [TODO — Phase 4 results viewer]
+│           ├── panel_training.py   ← [TODO — Phase 5+6 results viewer]
+│           ├── panel_evaluation.py ← [TODO — Phase 7 results viewer]
+│           └── panel_router.py     ← [TODO — Phase 8 router]
 │
 ├── phases/
-│   │
-│   ├── phase_1_data/
-│   │   ├── __init__.py
-│   │   ├── 01_download_sources.py       ← HuggingFace + GeoNames + madurapa
-│   │   ├── 02_gazetteer_builder.py      ← sl_gazetteer.csv + grounding verification
-│   │   ├── 03_distilabel_generator.py   ← args: --dataset-name --category --n-rows
-│   │   ├── 04_distilabel_evaluator.py   ← args: --dataset-name
-│   │   ├── 05_deduplication.py          ← args: --dataset-name --threshold --review-mode
-│   │   ├── 06_rule_labeler.py           ← args: --dataset-name
-│   │   ├── 07_data_quality_eval.py      ← args: --dataset-name
-│   │   └── 08_split_and_register.py     ← args: --dataset-name (MLflow log_input)
-│   │
-│   ├── phase_2_eda/
-│   │   ├── __init__.py
-│   │   └── 09_eda.py                    ← args: --dataset-name
-│   │                                       logs all plots to MLflow as artifacts
-│   │
-│   ├── phase_3_classical_ml/
-│   │   ├── __init__.py
-│   │   ├── config.py                    ← VECTORIZER_REGISTRY, CLASSIFIER_REGISTRY,
-│   │   │                                   HPO_SEARCH_SPACES — only file to edit for new models
-│   │   ├── vectorizers.py               ← TF-IDF char/word, Word2Vec, spaCy, Combined
-│   │   ├── classifiers.py               ← LogReg, SVM, LGBM, XGBoost, CatBoost, RF, FastText
-│   │   ├── train_all.py                 ← args: --dataset-name
-│   │   │                                   full grid: all vecs × all clfs
-│   │   ├── train_single.py              ← args: --dataset-name --vec X --clf Y [--params '{}']
-│   │   └── hpo.py                       ← args: --dataset-name --vec X --clf Y --n-trials N
-│   │
-│   ├── phase_4_transformers/
-│   │   ├── __init__.py
-│   │   ├── config.py                    ← TRANSFORMER_REGISTRY, TRAIN_CONFIG, HPO_SEARCH_SPACE
-│   │   ├── dataset.py                   ← CSV → HuggingFace Dataset + tokenizer
-│   │   ├── train_all.py                 ← args: --dataset-name
-│   │   ├── train_single.py              ← args: --dataset-name --model X [--params '{}']
-│   │   ├── hpo.py                       ← args: --dataset-name --model X --n-trials N
-│   │   └── inference.py                 ← args: --dataset-name --model X [--export-onnx]
-│   │
-│   ├── phase_5_evaluation/
-│   │   ├── __init__.py
-│   │   ├── compare_all.py               ← scans experiments/, builds master_comparison.csv
-│   │   ├── ablation.py                  ← rule-only vs llm-classifier vs trained model
-│   │   ├── latency_benchmark.py         ← p50/p95/p99 per saved model
-│   │   ├── cost_simulation.py           ← $/day per routing strategy
-│   │   ├── error_analysis.py            ← false negatives by category
-│   │   └── ensemble.py                  ← soft voting experiments (if needed)
-│   │
-│   └── phase_6_hybrid/
-│       ├── __init__.py
-│       ├── hybrid_router.py             ← rule engine + best model, .predict(text) → 0/1
-│       └── threshold_tuning.py          ← sweep threshold, optimize recall(1) >= 0.97
-│
+│   ├── phase_1_grounding.py        ← 500 Sinhala + 500 Tamil → verify is_pure_script() ✅
+│   ├── phase_2_generate.py         ← MAIN GENERATION: 60k rows parallel ✅
+│   ├── phase_3_split.py            ← 80/10/10 stratified split ✅
+│   ├── phase_4_eda.py              ← EDA: plots + summary stats ✅
+│   ├── phase_5_train_classical.py  ← 13 (vectorizer × classifier) experiments ✅
+│   ├── phase_6_train_transformers.py ← XLM-RoBERTa, MuRIL, mBERT [TODO]
+│   ├── phase_7_evaluate.py         ← Full evaluation on test.csv [TODO]
+│   └── phase_8_router.py           ← Threshold tuning + router [TODO]
 │
 ├── data/
-│   ├── raw/                             ← downloaded sources — never edited
-│   │   ├── hf_singlish/
-│   │   ├── hf_sold/
-│   │   ├── hf_tanglish/
-│   │   ├── hf_squad/
-│   │   ├── geonames_lk/
-│   │   └── madurapa/
-│   │
-│   ├── processed/
-│   │   ├── sl_gazetteer.csv             ← merged location dataset (~17k rows)
-│   │   └── sl_location_aliases.csv      ← hand-curated WhatsApp shortforms
-│   │
 │   ├── grounding/
-│   │   └── unicode_verification.csv     ← 200 Sinhala/Tamil script rows (rule engine proof)
-│   │
-│   └── datasets/                        ← dataset-agnostic: one folder per dataset
-│       └── v1_baseline/                 ← the one dataset for this project
+│   │   └── unicode_verification.csv  ← written by phase_1_grounding.py
+│   └── datasets/
+│       └── v1/
 │           ├── raw/
-│           │   ├── generated_raw.csv
-│           │   ├── generated_evaluated.csv
-│           │   ├── generated_deduped.csv
-│           │   ├── generated_labeled.csv
-│           │   └── dedup_review.csv     ← similarity pairs for manual inspection
-│           ├── train.csv
-│           ├── val.csv
-│           ├── test.csv                 ← DO NOT TOUCH until Phase 5
-│           ├── quality_report.json
-│           └── dedup.db                 ← Milvus Lite index (portable .db file)
+│           │   ├── generated_raw.csv   ← after phase_2_generate.py
+│           │   └── checkpoint.csv      ← live during generation
+│           ├── train.csv               ← 80%  — all development here
+│           ├── val.csv                 ← 10%  — development evaluation
+│           ├── test.csv                ← 10%  — DO NOT TOUCH until Phase 7
+│           └── split_stats.json
 │
-│
-├── experiments/                         ← all training artifacts, isolated per dataset
-│   └── v1_baseline/                     ← mirrors the dataset folder name
-│       ├── classical_ml/
+├── experiments/
+│   └── v1/
+│       ├── eda_summary.json
+│       ├── eda_plots/              ← 5 EDA plots
+│       ├── classical/
 │       │   ├── models/
-│       │   │   ├── tfidf_char__svm.pkl
-│       │   │   ├── tfidf_char__svm_vectorizer.pkl
-│       │   │   └── ...                  ← one .pkl pair per combination
+│       │   │   ├── tfidf_combined__lightgbm/model.pkl
+│       │   │   ├── tfidf_combined__logistic_regression/model.pkl
+│       │   │   └── ...
 │       │   └── results/
-│       │       ├── runs.csv             ← exported MLflow run table
-│       │       ├── best_params.json     ← HPO winner params
-│       │       └── plots/
-│       │           └── confusion_matrix__tfidf_char__svm.png
-│       │
 │       └── transformers/
 │           ├── models/
-│           │   ├── xlmr-base/           ← HuggingFace checkpoint folder
-│           │   │   ├── model.safetensors
-│           │   │   ├── config.json
-│           │   │   └── tokenizer files
-│           │   ├── xlmr-base_onnx/      ← ONNX export (if inference.py run with flag)
-│           │   └── ...
 │           └── results/
-│               ├── runs.csv
-│               ├── best_params.json
-│               └── plots/
-│                   └── training_curves__xlmr-base.png
 │
+├── results/
+│   ├── master_comparison.csv       ← all experiments, all approaches
+│   └── final_recommendation.md
 │
-├── results/                             ← GLOBAL results across all models
-│   ├── master_comparison.csv            ← all models × all metrics in one table
-│   ├── ablation_results.csv             ← rule-only vs llm-classifier vs trained
-│   ├── cost_simulation.json
-│   ├── latency_benchmark.json
-│   └── final_recommendation.md         ← winning config with rationale
-│
-│
-├── mlruns/                              ← MLflow tracking folder (git-tracked)
-│
-└── assets/
-    └── graphs/                          ← global comparison plots (.png)
+├── mlruns/                         ← MLflow tracking (run: mlflow ui)
+├── docs/
+├── AGENTS.md
+├── pyproject.toml
+├── .env                            ← OPENAI_API_KEY (gitignored)
+├── .env.example
+└── sync.sh
 ```
+
+---
+
+## FILES TO DELETE
+
+```bash
+rm phases/phase_3_evaluate.py       # LLM-as-judge removed
+rm src/frontend/panels/panel_config.py  # Config tab removed
+rm -rf src/backend/config/snapshots/    # snapshot functionality removed
+```
+
+---
+
+## PHASE STATUS
+
+| Phase | File | Status | Command |
+|-------|------|--------|---------|
+| 0 | Setup examples | ✅ Done | `python cli.py examples-all --workers 20` |
+| 1 | Grounding | ✅ Implemented | `python phases/phase_1_grounding.py` |
+| 2 | Generate 60k | 🔄 Running | `python phases/phase_2_generate.py --workers 10` |
+| 3 | Split | ⏳ After phase 2 | `python phases/phase_3_split.py` |
+| 4 | EDA | ✅ Implemented | `python phases/phase_4_eda.py` |
+| 5 | Classical ML | ✅ Implemented | `python phases/phase_5_train_classical.py --all` |
+| 6 | Transformers | ⏳ TODO | `python phases/phase_6_train_transformers.py` |
+| 7 | Evaluate | ⏳ TODO | `python phases/phase_7_evaluate.py` |
+| 8 | Router | ⏳ TODO | `python phases/phase_8_router.py` |
 
 ---
 
 ## KEY DESIGN DECISIONS
 
-### Single dataset, dataset-agnostic structure
-One dataset (v1_baseline) for this project. The folder structure under
-data/datasets/ and experiments/ is named by dataset, not hardcoded.
-If a v2 is ever needed, run Phase 1 with --dataset-name v2_production_fix.
-A new folder appears. compare_all.py discovers it automatically.
-No refactoring. No code changes.
-
-### Why experiments/ mirrors data/datasets/ naming
-Every model in experiments/v1_baseline/ was trained on data/datasets/v1_baseline/.
-The naming makes this obvious without checking MLflow.
-MLflow provides the authoritative lineage record via mlflow.log_input().
-The folder naming is human-readable redundancy.
-
-### Why test.csv is untouched until Phase 5
-Training on or evaluating against the test set during development is
-data leakage. All development uses train.csv and val.csv only.
-Test set is accessed ONCE — in Phase 5 final evaluation for the HPO winner.
-
-### Gradio UI is fully dynamic — no hardcoded lists
-ui_utils.py scans data/datasets/ and experiments/ to populate dropdowns.
-REGISTRY keys are imported from config.py at runtime.
-After any phase run that creates new folders: click Refresh → dropdowns update.
-The UI reflects the actual state of the filesystem at all times.
-
-### No system prompt editing in Gradio UI
-System prompts live in phases/phase_1_data/03_distilabel_generator.py.
-They are versioned in git alongside the code.
-Editing prompts = editing code = git diff shows exactly what changed.
-This is cleaner and safer than a freeform UI text area.
-
-### MLflow replaces DVC
-mlflow.log_input() provides dataset lineage: name, hash, source, schema.
-Every training run links to the exact dataset it used.
-This covers the dataset tracking use case without adding DVC as a dependency.
+- **No LLM-as-judge** — removed. Trust structured output + distribution design.
+- **No underscore prefix** on module-level helpers (only on private class methods).
+- **20 workers safe** with exponential backoff on RateLimitError.
+- **No --reload** when running uvicorn during generation.
+- **examples.json** — generate once with `cli.py examples-all`. Used as-is during generation.
+- **test.csv** — never accessed before Phase 7. All development on train/val only.
