@@ -6,7 +6,13 @@ import gradio as gr
 
 
 def build_app() -> gr.Blocks:
-    from frontend.panels import panel_eda, panel_generation, panel_training
+    from frontend.panels import (
+        panel_eda,
+        panel_evaluation,
+        panel_generation,
+        panel_router,
+        panel_training,
+    )
 
     with gr.Blocks(title="Sprout Router Classifier") as demo:
         gr.Markdown("# 🚦 Sprout Router Classifier — model-router-classifier")
@@ -25,18 +31,10 @@ def build_app() -> gr.Blocks:
                 panel_training.build()
 
             with gr.Tab("📈 Evaluate"):
-                gr.Markdown(
-                    "### Evaluation\n"
-                    "Run `python phases/phase_7_evaluate.py` after training is complete.\n\n"
-                    "This tab will show the full evaluation report once implemented."
-                )
+                panel_evaluation.build()
 
             with gr.Tab("🚦 Router"):
-                gr.Markdown(
-                    "### Router\n"
-                    "Run `python phases/phase_8_router.py` after evaluation.\n\n"
-                    "This tab will show threshold tuning and live router testing once implemented."
-                )
+                panel_router.build()
 
     return demo
 

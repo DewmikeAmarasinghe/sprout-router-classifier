@@ -207,14 +207,18 @@ LK = LanguageKey
 DISTRIBUTION: GenerationDistribution = GenerationDistribution(
     global_total=60_000,
     languages=[
-        # ── PURE ENGLISH (28% = ~16,800) ─────────────────────────────────────
+        # ── PURE ENGLISH (35% = ~21,000) ──────────────────────────────────────
+        # Largest single bucket. Pure English label=0 examples are the primary
+        # anchor class — the classifier must confidently distinguish clear English
+        # from Singlish/Tanglish. Banking, insurance, tourism, and urban educated
+        # users all skew English. Hospitality raised for tourist-facing clients.
         LanguageBucket(
             language=LK.PURE_ENGLISH,
-            fraction=0.28,
+            fraction=0.35,
             industries=[
                 industry(
                     IK.ECOMMERCE,
-                    0.14,
+                    0.12,
                     simple=0.45,
                     named_loc=0.08,
                     proximity=0.05,
@@ -227,7 +231,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.HEALTHCARE,
-                    0.13,
+                    0.12,
                     simple=0.40,
                     named_loc=0.10,
                     proximity=0.08,
@@ -253,7 +257,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.INSURANCE,
-                    0.13,
+                    0.12,
                     simple=0.30,
                     named_loc=0.06,
                     proximity=0.02,
@@ -279,7 +283,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.LOGISTICS,
-                    0.10,
+                    0.06,
                     simple=0.40,
                     named_loc=0.10,
                     proximity=0.10,
@@ -292,7 +296,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.HOSPITALITY,
-                    0.09,
+                    0.15,
                     simple=0.48,
                     named_loc=0.14,
                     proximity=0.10,
@@ -305,7 +309,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.EDUCATION,
-                    0.08,
+                    0.10,
                     simple=0.50,
                     named_loc=0.14,
                     proximity=0.06,
@@ -318,14 +322,16 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
             ],
         ),
-        # ── SINGLISH LIGHT (21% = ~12,600, all label=1) ──────────────────────
+        # ── SINGLISH LIGHT (28% = ~16,800, all label=1) ───────────────────────
+        # Dominant informal register for SL consumer interactions (eCommerce,
+        # healthcare). Reduced slightly from 34% to let pure_english lead.
         LanguageBucket(
             language=LK.SINGLISH_LIGHT,
-            fraction=0.21,
+            fraction=0.28,
             industries=[
                 industry(
                     IK.ECOMMERCE,
-                    0.17,
+                    0.22,
                     simple=0.33,
                     named_loc=0.08,
                     proximity=0.10,
@@ -338,7 +344,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.HEALTHCARE,
-                    0.14,
+                    0.17,
                     simple=0.28,
                     named_loc=0.08,
                     proximity=0.14,
@@ -351,7 +357,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.BANKING,
-                    0.18,
+                    0.17,
                     simple=0.24,
                     named_loc=0.07,
                     proximity=0.09,
@@ -364,7 +370,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.INSURANCE,
-                    0.11,
+                    0.04,
                     simple=0.26,
                     named_loc=0.05,
                     proximity=0.03,
@@ -377,7 +383,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.TELECOM,
-                    0.13,
+                    0.12,
                     simple=0.28,
                     named_loc=0.05,
                     proximity=0.05,
@@ -403,7 +409,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.HOSPITALITY,
-                    0.08,
+                    0.10,
                     simple=0.36,
                     named_loc=0.10,
                     proximity=0.16,
@@ -416,7 +422,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.EDUCATION,
-                    0.08,
+                    0.07,
                     simple=0.35,
                     named_loc=0.08,
                     proximity=0.07,
@@ -429,14 +435,16 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
             ],
         ),
-        # ── SINGLISH HEAVY (13% = ~7,800, all label=1) ───────────────────────
+        # ── SINGLISH HEAVY (17% = ~10,200, all label=1) ───────────────────────
+        # Local mass-market: the most casual, code-mixed register.
+        # eCommerce dominates — everyday local shopping queries.
         LanguageBucket(
             language=LK.SINGLISH_HEAVY,
-            fraction=0.13,
+            fraction=0.17,
             industries=[
                 industry(
                     IK.ECOMMERCE,
-                    0.19,
+                    0.25,
                     simple=0.35,
                     named_loc=0.06,
                     proximity=0.12,
@@ -449,7 +457,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.HEALTHCARE,
-                    0.16,
+                    0.18,
                     simple=0.30,
                     named_loc=0.07,
                     proximity=0.14,
@@ -462,7 +470,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.BANKING,
-                    0.18,
+                    0.17,
                     simple=0.26,
                     named_loc=0.06,
                     proximity=0.10,
@@ -475,7 +483,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.INSURANCE,
-                    0.10,
+                    0.04,
                     simple=0.28,
                     named_loc=0.04,
                     proximity=0.03,
@@ -514,7 +522,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.HOSPITALITY,
-                    0.07,
+                    0.08,
                     simple=0.36,
                     named_loc=0.08,
                     proximity=0.18,
@@ -527,7 +535,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.EDUCATION,
-                    0.07,
+                    0.05,
                     simple=0.34,
                     named_loc=0.07,
                     proximity=0.06,
@@ -540,10 +548,12 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
             ],
         ),
-        # ── TANGLISH LIGHT (19% = ~11,400, all label=1) ──────────────────────
+        # ── TANGLISH LIGHT (11% = ~6,600, all label=1) ────────────────────────
+        # SL Tamil speakers ~18–28% of population, concentrated in north/east.
+        # Healthcare raised — Tamil communities are heavy healthcare chatbot users.
         LanguageBucket(
             language=LK.TANGLISH_LIGHT,
-            fraction=0.19,
+            fraction=0.11,
             industries=[
                 industry(
                     IK.ECOMMERCE,
@@ -560,7 +570,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.HEALTHCARE,
-                    0.15,
+                    0.18,
                     simple=0.27,
                     named_loc=0.08,
                     proximity=0.13,
@@ -586,7 +596,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.INSURANCE,
-                    0.11,
+                    0.09,
                     simple=0.26,
                     named_loc=0.05,
                     proximity=0.02,
@@ -625,7 +635,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.HOSPITALITY,
-                    0.07,
+                    0.05,
                     simple=0.36,
                     named_loc=0.10,
                     proximity=0.16,
@@ -638,7 +648,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.EDUCATION,
-                    0.08,
+                    0.09,
                     simple=0.34,
                     named_loc=0.08,
                     proximity=0.06,
@@ -651,10 +661,12 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
             ],
         ),
-        # ── TANGLISH HEAVY (19% = ~11,400, all label=1) ──────────────────────
+        # ── TANGLISH HEAVY (9% = ~5,400, all label=1) ─────────────────────────
+        # Predominantly northern/eastern SL Tamil-speaking users.
+        # Healthcare raised — heavy use in Tamil-majority districts.
         LanguageBucket(
             language=LK.TANGLISH_HEAVY,
-            fraction=0.19,
+            fraction=0.09,
             industries=[
                 industry(
                     IK.ECOMMERCE,
@@ -671,7 +683,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.HEALTHCARE,
-                    0.17,
+                    0.20,
                     simple=0.28,
                     named_loc=0.07,
                     proximity=0.13,
@@ -697,7 +709,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.INSURANCE,
-                    0.11,
+                    0.09,
                     simple=0.27,
                     named_loc=0.04,
                     proximity=0.02,
@@ -736,7 +748,7 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
                 industry(
                     IK.HOSPITALITY,
-                    0.06,
+                    0.05,
                     simple=0.37,
                     named_loc=0.08,
                     proximity=0.18,

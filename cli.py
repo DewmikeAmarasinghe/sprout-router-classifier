@@ -4,7 +4,7 @@ cli.py — Development and testing tool.
 
 Generation and split have their own phase files:
     python phases/phase_2_generate.py    ← main generation
-    python phases/phase_4_split.py       ← split into train/val/test
+    python phases/phase_3_split.py       ← split into train/val/test
 
 This file is for interactive development and testing:
     python cli.py distribution
@@ -89,11 +89,7 @@ def cmd_examples(args: argparse.Namespace) -> None:
 
 
 def cmd_examples_all(args: argparse.Namespace) -> None:
-    """Generate examples for all active cells in parallel.
-
-    Sequential time at 40s/call: ~4 hours.
-    With 20 workers: ~12 minutes.
-    """
+    """Generate examples for all active cells in parallel."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     from backend.config.distribution import DISTRIBUTION
@@ -106,7 +102,7 @@ def cmd_examples_all(args: argparse.Namespace) -> None:
         if args.force or not example_store.is_cached(c.language, c.industry, c.scenario)
     ]
     skipped = len(cells) - len(to_gen)
-    workers = args.workers
+    workers = min(args.workers, 10)  # cap at 10 to avoid rate limits
     est_min = max(1, len(to_gen) * 40 // workers // 60 + 1)
 
     print(f"\nGenerating examples for {len(to_gen)} cells ({skipped} already cached)")
@@ -139,11 +135,13 @@ def cmd_distribution(args: argparse.Namespace) -> None:  # noqa: ARG001
 
     summary = DISTRIBUTION.summary()
     total = sum(summary.values())
+
     print("\nDISTRIBUTION SUMMARY")
     print("=" * 55)
     for lang, count in sorted(summary.items(), key=lambda x: -x[1]):
         bar = "█" * int(count / total * 40)
         print(f"  {lang:<22} {count:>6,}  {bar}")
+
     print(f"\n  TOTAL raw target: {DISTRIBUTION.global_total:,}")
     print(f"  Active cells:     {len(DISTRIBUTION.to_cells())}")
     print(f"  All cells:        {len(DISTRIBUTION.all_cells_including_zero())}")
@@ -152,13 +150,27 @@ def cmd_distribution(args: argparse.Namespace) -> None:  # noqa: ARG001
     for cell in sorted(DISTRIBUTION.to_cells(), key=lambda c: -c.target_count)[:10]:
         print(f"  {cell.cell_id:<55} {cell.target_count:>5}")
 
-    print("\nPER-LANGUAGE BREAKDOWN:")
+    print("\nPER-LANGUAGE BREAKDOWN (all 8 industries × 9 scenarios):")
     for lang_b in DISTRIBUTION.languages:
-        print(f"\n  {lang_b.language} ({lang_b.fraction:.1%} = {lang_b.computed_count:,} rows):")
-        for ind_b in sorted(lang_b.industries, key=lambda x: -x.computed_count)[:4]:
+        label_note = "label=0" if lang_b.language == "pure_english" else "label=1"
+        print(f"\n{'─' * 75}")
+        print(
+            f"  {lang_b.language}  "
+            f"({lang_b.fraction:.1%} = {lang_b.computed_count:,} rows, {label_note})"
+        )
+        print(f"{'─' * 75}")
+
+        for ind_b in sorted(lang_b.industries, key=lambda x: -x.computed_count):
             print(
-                f"    {ind_b.industry:<14} {ind_b.fraction:.1%} = {ind_b.computed_count:>5,} rows"
+                f"\n    {ind_b.industry:<14}  "
+                f"{ind_b.fraction:.1%} of language  =  {ind_b.computed_count:>5,} rows"
             )
+            for sc_b in sorted(ind_b.scenarios, key=lambda s: -s.computed_count):
+                active = "  " if sc_b.computed_count > 0 else "—"
+                print(
+                    f"      {active} {sc_b.scenario:<28}  "
+                    f"{sc_b.fraction:.1%}  =  {sc_b.computed_count:>4,} rows"
+                )
 
 
 def main() -> None:
@@ -186,7 +198,7 @@ def main() -> None:
 
     p = sub.add_parser("examples-all", help="Generate examples for all cells in parallel")
     p.add_argument("--force", action="store_true")
-    p.add_argument("--workers", type=int, default=20)
+    p.add_argument("--workers", type=int, default=10)
 
     sub.add_parser("distribution", help="Print full distribution breakdown")
 

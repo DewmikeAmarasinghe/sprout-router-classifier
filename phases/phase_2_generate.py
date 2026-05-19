@@ -1,35 +1,33 @@
 """
 Phase 2 — Training Data Generation.
 
-Generates ~60,000 training rows in parallel across 352 cells.
+Generates ~60,000 training rows across 352 cells.
 Each cell (language × industry × scenario) runs its own multi-turn
 OpenAI conversation in a separate thread.
 
-Rate limit protection:
-    A global semaphore (API_CONCURRENCY_LIMIT in config/settings.py) caps
-    concurrent in-flight API calls regardless of worker count.
-    Default: 15 concurrent calls. Adjust based on your OpenAI tier:
-        Tier 1 (< $50):   set to 10
-        Tier 2 ($50–$500): set to 15 (default)
-        Tier 3+ ($500+):  set to 20–30
+Workers: default 10, max 10.
+    10 workers is the tested safe limit on Tier 1/2 API access.
+    Higher values trigger rate limit errors (429). The OpenAI SDK handles
+    transient 429s internally, but sustained overload wastes time.
+    DO NOT run with more than 10 workers.
 
-    DO NOT run phase_1_grounding.py at the same time — they share the
-    same API key and rate limit budget.
+DO NOT run phase_1_grounding.py at the same time.
+    They share the same API key and rate limit budget.
 
-Usage:
-    python phases/phase_2_generate.py                  # all cells, 20 workers
-    python phases/phase_2_generate.py --workers 10     # fewer workers (safer rate limits)
-    python phases/phase_2_generate.py --workers 40     # max workers
-    python phases/phase_2_generate.py --resume         # continue from checkpoint
-    python phases/phase_2_generate.py --language singlish_light  # one language only
+DO NOT start uvicorn with --reload during generation.
+    File watcher restarts the server when checkpoint.csv changes.
 
-Speed estimates (60k rows / ~4 turns per cell):
-    10 workers  →  ~36 min
-    20 workers  →  ~18 min  (default)
-    40 workers  →  ~10 min  (only safe on Tier 3+)
+Speed estimate (60k rows / ~4 turns per cell / 352 cells):
+    10 workers → ~18 min
 
 After completion:
     python phases/phase_3_split.py
+
+Usage:
+    python phases/phase_2_generate.py                   # all cells, 10 workers
+    python phases/phase_2_generate.py --workers 5       # fewer workers if needed
+    python phases/phase_2_generate.py --resume          # continue from checkpoint
+    python phases/phase_2_generate.py --language singlish_light  # one language only
 """
 
 from __future__ import annotations
@@ -52,7 +50,7 @@ logging.basicConfig(
 )
 
 from backend.config.keys import IndustryKey, LanguageKey, ScenarioKey
-from backend.generation.generator import GeneratorService
+from backend.generation.generator import MAX_WORKERS, GeneratorService
 
 
 def main() -> None:
@@ -72,14 +70,14 @@ def main() -> None:
     parser.add_argument(
         "--workers",
         type=int,
-        default=20,
-        help="Worker threads (parallel cells). Default 20, max 40.",
+        default=MAX_WORKERS,
+        help=f"Worker threads (parallel cells). Default {MAX_WORKERS}, max {MAX_WORKERS}.",
     )
     args = parser.parse_args()
 
-    if args.workers > 40:
-        print(f"Warning: workers capped at 40 (requested {args.workers})")
-        args.workers = 40
+    if args.workers > MAX_WORKERS:
+        print(f"Warning: workers capped at {MAX_WORKERS} (requested {args.workers})")
+        args.workers = MAX_WORKERS
 
     GeneratorService().run(
         dataset_name=args.dataset,

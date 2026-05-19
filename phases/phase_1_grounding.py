@@ -40,7 +40,7 @@ log = logging.getLogger(__name__)
 OUTPUT_PATH = DATA_DIR / "grounding" / "unicode_verification.csv"
 TARGET_EACH = 500
 
-_SINHALA_PROMPT = (
+SINHALA_PROMPT = (
     "Generate {n} realistic customer service messages written in pure Sinhala script. "
     "These MUST use actual Sinhala unicode characters (ශ, ල, ා, ් etc.) — NOT romanized. "
     "They should look like real WhatsApp or website chatbot messages. "
@@ -49,7 +49,7 @@ _SINHALA_PROMPT = (
     'Return ONLY valid JSON: {{"messages": ["message1", ..., "message{n}"]}}'
 )
 
-_TAMIL_PROMPT = (
+TAMIL_PROMPT = (
     "Generate {n} realistic customer service messages written in pure Tamil script. "
     "These MUST use actual Tamil unicode characters (த, ம, ி, ழ etc.) — NOT romanized. "
     "They should look like real WhatsApp or website chatbot messages. "
@@ -64,7 +64,7 @@ def generate_script_messages(script: str, n: int) -> list[str]:
     from openai import OpenAI
 
     client = OpenAI()
-    template = _SINHALA_PROMPT if script == "sinhala" else _TAMIL_PROMPT
+    template = SINHALA_PROMPT if script == "sinhala" else TAMIL_PROMPT
     batch = 50
     messages: list[str] = []
 

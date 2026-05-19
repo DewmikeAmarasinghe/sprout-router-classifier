@@ -65,9 +65,9 @@ keys/
 # Commit:   data/grounding/unicode_verification.csv  (small, proves rule works)
 #           data/datasets/*/split_stats.json          (small reference stats)
 #           src/backend/generation/examples.json      (generated once, expensive)
+#           data/datasets/*/raw/generated_raw.csv    (large, need to be portable, local->kaggle->local)
 # Ignore:   everything else in data/datasets/
 
-data/datasets/*/raw/generated_raw.csv
 data/datasets/*/raw/checkpoint.csv
 data/datasets/*/train.csv
 data/datasets/*/val.csv

@@ -1,9 +1,8 @@
 """
 Generation tab panel.
 
-Live progress is streamed into the UI as cells complete.
-Generator functions (yield) feed [1/352] Done: ... messages
-directly to the output textbox without blocking.
+One shared (Language × Industry × Scenario) selection drives all sections.
+Live progress streamed into the UI as cells complete.
 """
 
 from __future__ import annotations
@@ -34,6 +33,7 @@ def scenario_choices() -> list[str]:
 
 
 def get_cell_info(language: str, industry: str, scenario: str) -> str:
+    """Return target row count and fractions for the selected cell."""
     try:
         lang_b = DISTRIBUTION.get_language(LanguageKey(language))
         if not lang_b:
@@ -45,7 +45,7 @@ def get_cell_info(language: str, industry: str, scenario: str) -> str:
         if not sc_b:
             return "Scenario not found"
         cached = (
-            "✅ cell-specific"
+            "✅ cell-specific (examples.json)"
             if example_store.is_cached(
                 LanguageKey(language), IndustryKey(industry), ScenarioKey(scenario)
             )
@@ -63,6 +63,7 @@ def get_cell_info(language: str, industry: str, scenario: str) -> str:
 
 
 def on_selection_change(language: str, industry: str, scenario: str) -> tuple[str, str]:
+    """Auto-update cell info and system prompt on any dropdown change."""
     return (
         get_cell_info(language, industry, scenario),
         preview_prompt(language, industry, scenario),
@@ -70,6 +71,7 @@ def on_selection_change(language: str, industry: str, scenario: str) -> tuple[st
 
 
 def preview_prompt(language: str, industry: str, scenario: str) -> str:
+    """Build the system prompt for the selected cell (no API call)."""
     try:
         return PROMPT_FACTORY.build_preview(
             LanguageKey(language),
@@ -80,29 +82,8 @@ def preview_prompt(language: str, industry: str, scenario: str) -> str:
         return f"Error: {exc}"
 
 
-def show_examples(language: str, industry: str, scenario: str) -> str:
-    try:
-        examples = example_store.get(
-            LanguageKey(language),
-            IndustryKey(industry),
-            ScenarioKey(scenario),
-        )
-        cached = example_store.is_cached(
-            LanguageKey(language),
-            IndustryKey(industry),
-            ScenarioKey(scenario),
-        )
-        header = (
-            "Source: cell-specific (examples.json)\n"
-            if cached
-            else "Source: LengthRange fallback — run `python cli.py examples-all`\n"
-        )
-        return header + "\n".join(f"{i + 1}. {ex}" for i, ex in enumerate(examples))
-    except Exception as exc:  # noqa: BLE001
-        return f"Error: {exc}"
-
-
 def dry_run(language: str, industry: str, scenario: str, n: int) -> str:
+    """Generate N sentences for the selected cell. Nothing is saved."""
     try:
         from backend.generation.generator import GeneratorService
         from backend.generation.pymodels import GenerationCell
@@ -123,116 +104,8 @@ def dry_run(language: str, industry: str, scenario: str, n: int) -> str:
         return f"Error: {exc}"
 
 
-# ── Streaming generation ──────────────────────────────────────────────────────
-
-
-def _run_in_thread_with_queue(
-    dataset: str,
-    resume: bool,
-    workers: int,
-    updates: queue.SimpleQueue[str],
-) -> None:
-    """Thread target: runs generation and feeds progress into the queue."""
-    from backend.generation.generator import GeneratorService
-
-    def progress(msg: str) -> None:
-        updates.put(msg)
-
-    try:
-        GeneratorService().run(
-            dataset_name=dataset,
-            resume=resume,
-            max_workers=workers,
-            on_progress=progress,
-        )
-        updates.put("__DONE__")
-    except Exception as exc:  # noqa: BLE001
-        updates.put(f"__ERROR__ {exc}")
-
-
-def stream_generate(resume: bool, workers: int) -> Generator[str, None, None]:
-    """Generator: streams [1/352] Done: ... progress into the output textbox."""
-    dataset = settings_manager.get("DATASET_VERSION")
-    updates: queue.SimpleQueue[str] = queue.SimpleQueue()
-
-    thread = threading.Thread(
-        target=_run_in_thread_with_queue,
-        args=(dataset, resume, int(workers), updates),
-        daemon=True,
-    )
-    thread.start()
-
-    lines: list[str] = [f"Generation started for dataset '{dataset}'..."]
-    yield "\n".join(lines)
-
-    while True:
-        msg = updates.get()  # blocks until next message arrives
-
-        if msg == "__DONE__":
-            lines.append("✅ Generation complete. Run Split next.")
-            yield "\n".join(lines[-60:])
-            break
-
-        if msg.startswith("__ERROR__"):
-            lines.append(f"❌ {msg[9:]}")
-            yield "\n".join(lines[-60:])
-            break
-
-        lines.append(msg)
-        yield "\n".join(lines[-60:])  # show last 60 lines to avoid huge output
-
-
-def stream_full_pipeline(resume: bool, workers: int) -> Generator[str, None, None]:
-    """Generator: generate → split with live progress."""
-    dataset = settings_manager.get("DATASET_VERSION")
-    updates: queue.SimpleQueue[str] = queue.SimpleQueue()
-
-    thread = threading.Thread(
-        target=_run_in_thread_with_queue,
-        args=(dataset, resume, int(workers), updates),
-        daemon=True,
-    )
-    thread.start()
-
-    lines: list[str] = [f"Pipeline started for dataset '{dataset}'..."]
-    yield "\n".join(lines)
-
-    while True:
-        msg = updates.get()
-
-        if msg == "__DONE__":
-            lines.append("✅ Generation done. Running split...")
-            yield "\n".join(lines[-60:])
-            break
-
-        if msg.startswith("__ERROR__"):
-            lines.append(f"❌ Generation failed: {msg[9:]}")
-            yield "\n".join(lines[-60:])
-            return
-
-        lines.append(msg)
-        yield "\n".join(lines[-60:])
-
-    # Run split after generation
-    try:
-        from backend.generation.splitter import DataSplitter
-
-        stats = DataSplitter().run(dataset)
-        lines += [
-            "✅ Split complete:",
-            f"  train: {stats['train']['rows']:,}",
-            f"  val:   {stats['val']['rows']:,}",
-            f"  test:  {stats['test']['rows']:,}",
-            "",
-            "Next: EDA tab → Training tab.",
-        ]
-        yield "\n".join(lines[-60:])
-    except Exception as exc:  # noqa: BLE001
-        lines.append(f"❌ Split failed: {exc}")
-        yield "\n".join(lines[-60:])
-
-
 def run_split() -> str:
+    """Run DataSplitter on the active dataset version."""
     dataset = settings_manager.get("DATASET_VERSION")
     try:
         from backend.generation.splitter import DataSplitter
@@ -248,11 +121,108 @@ def run_split() -> str:
         return f"Error: {exc}"
 
 
+# ── Streaming generation ──────────────────────────────────────────────────────
+
+
+def stream_generate(resume: bool, workers: int) -> Generator[str, None, None]:
+    """Generator: streams per-cell progress into the output textbox."""
+    dataset = settings_manager.get("DATASET_VERSION")
+    updates: queue.SimpleQueue[str] = queue.SimpleQueue()
+
+    def thread_target() -> None:
+        from backend.generation.generator import GeneratorService
+
+        try:
+            GeneratorService().run(
+                dataset_name=dataset,
+                resume=resume,
+                max_workers=int(workers),
+                on_progress=updates.put,
+            )
+            updates.put("__DONE__")
+        except Exception as exc:  # noqa: BLE001
+            updates.put(f"__ERROR__ {exc}")
+
+    threading.Thread(target=thread_target, daemon=True).start()
+
+    lines: list[str] = [f"Generation started for dataset '{dataset}'..."]
+    yield "\n".join(lines)
+
+    while True:
+        msg = updates.get()
+        if msg == "__DONE__":
+            lines.append("✅ Generation complete. Run Split next.")
+            yield "\n".join(lines[-60:])
+            break
+        if msg.startswith("__ERROR__"):
+            lines.append(f"❌ {msg[9:]}")
+            yield "\n".join(lines[-60:])
+            break
+        lines.append(msg)
+        yield "\n".join(lines[-60:])
+
+
+def stream_full_pipeline(resume: bool, workers: int) -> Generator[str, None, None]:
+    """Generator: generate → split with live progress."""
+    dataset = settings_manager.get("DATASET_VERSION")
+    updates: queue.SimpleQueue[str] = queue.SimpleQueue()
+
+    def thread_target() -> None:
+        from backend.generation.generator import GeneratorService
+
+        try:
+            GeneratorService().run(
+                dataset_name=dataset,
+                resume=resume,
+                max_workers=int(workers),
+                on_progress=updates.put,
+            )
+            updates.put("__DONE__")
+        except Exception as exc:  # noqa: BLE001
+            updates.put(f"__ERROR__ {exc}")
+
+    threading.Thread(target=thread_target, daemon=True).start()
+
+    lines: list[str] = [f"Pipeline started for dataset '{dataset}'..."]
+    yield "\n".join(lines)
+
+    while True:
+        msg = updates.get()
+        if msg == "__DONE__":
+            lines.append("✅ Generation done. Running split...")
+            yield "\n".join(lines[-60:])
+            break
+        if msg.startswith("__ERROR__"):
+            lines.append(f"❌ Generation failed: {msg[9:]}")
+            yield "\n".join(lines[-60:])
+            return
+        lines.append(msg)
+        yield "\n".join(lines[-60:])
+
+    try:
+        from backend.generation.splitter import DataSplitter
+
+        stats = DataSplitter().run(dataset)
+        lines += [
+            "✅ Split complete:",
+            f"  train: {stats['train']['rows']:,}",
+            f"  val:   {stats['val']['rows']:,}",
+            f"  test:  {stats['test']['rows']:,}",
+            "",
+            "Next: EDA → Training → Evaluate.",
+        ]
+        yield "\n".join(lines[-60:])
+    except Exception as exc:  # noqa: BLE001
+        lines.append(f"❌ Split failed: {exc}")
+        yield "\n".join(lines[-60:])
+
+
 def build() -> None:
-    """Build the Generation tab. One selection, all sections react."""
+    """Build the Generation tab. One selection set, all sections react."""
 
     gr.Markdown("Select **(Language × Industry × Scenario)**. All sections update automatically.")
 
+    # ── Shared selection ─────────────────────────────────────────────────────
     with gr.Row():
         lang_dd = gr.Dropdown(
             choices=language_choices(), value=language_choices()[0], label="Language"
@@ -266,15 +236,18 @@ def build() -> None:
 
     cell_info = gr.Textbox(
         value=get_cell_info(language_choices()[0], industry_choices()[0], scenario_choices()[0]),
-        label="Cell info",
+        label="Cell info — target rows and fraction breakdown",
         interactive=False,
         max_lines=1,
     )
 
+    # ── System prompt preview ────────────────────────────────────────────────
+    # Examples from examples.json are already embedded in this preview.
+    # Run `python cli.py examples-all --workers 10` to populate cell-specific examples.
     with gr.Accordion("🔍 System Prompt Preview", open=True):
         gr.Markdown(
-            "Auto-updates on selection change. Shows all 8 anti-scenarios. "
-            "Run `python cli.py examples-all --workers 20` to populate examples."
+            "Auto-updates on selection change. Includes examples from `examples.json` "
+            "(LengthRange fallback until you run `python cli.py examples-all`)."
         )
         prompt_box = gr.Textbox(
             value=preview_prompt(
@@ -285,14 +258,7 @@ def build() -> None:
             interactive=False,
         )
 
-    with gr.Accordion("📋 Examples for Selected Cell", open=False):
-        gr.Markdown(
-            "Read-only. Run `python cli.py examples-all --workers 20` to populate all cells."
-        )
-        load_ex_btn = gr.Button("Show Examples", size="sm")
-        examples_box = gr.Textbox(label="Examples", lines=10, interactive=False)
-        load_ex_btn.click(fn=show_examples, inputs=[lang_dd, ind_dd, sc_dd], outputs=examples_box)
-
+    # ── Dry run ──────────────────────────────────────────────────────────────
     with gr.Accordion("🧪 Dry Run — test one cell", open=True):
         gr.Markdown("Generate N sentences for the selected cell. **Nothing is saved.**")
         dry_n = gr.Slider(minimum=3, maximum=50, value=5, step=1, label="N sentences")
@@ -300,27 +266,27 @@ def build() -> None:
         dry_out = gr.Textbox(label="Output", lines=20, interactive=False)
         dry_btn.click(fn=dry_run, inputs=[lang_dd, ind_dd, sc_dd, dry_n], outputs=dry_out)
 
+    # ── Full pipeline ────────────────────────────────────────────────────────
     with gr.Accordion("🚀 Full Pipeline", open=True):
         dataset = settings_manager.get("DATASET_VERSION")
         cp_every = settings_manager.get("CHECKPOINT_EVERY")
-        concurrency = settings_manager.get("API_CONCURRENCY_LIMIT")
+        max_w = settings_manager.get("MAX_GENERATION_WORKERS")
 
         gr.Markdown(
             f"**Dataset:** `{dataset}`  |  "
-            f"**API concurrency limit:** `{concurrency}` concurrent calls  "
-            f"(edit `API_CONCURRENCY_LIMIT` in `config/settings.py`)\n\n"
+            f"**Max workers:** {max_w} (hard cap — higher causes rate limit errors)\n\n"
             f"Checkpoint every **{cp_every:,}** rows. "
             "Live progress shown below as cells complete.\n\n"
-            "⚠️  Start server **without `--reload`** — file watcher kills generation.\n\n"
-            "**Resume** = skip completed cells. Only after an interrupted run."
+            "⚠️  Start server **without `--reload`** — file watcher interrupts generation.\n\n"
+            "**Resume** = skip completed cells. Use only after an interrupted run."
         )
 
         workers_slider = gr.Slider(
             minimum=1,
-            maximum=40,
-            value=20,
+            maximum=10,
+            value=10,
             step=1,
-            label="Workers (parallel cells, 1–40)",
+            label="Workers (parallel cells, 1–10)",
         )
         resume_cb = gr.Checkbox(
             label="Resume from checkpoint (only if previous run was interrupted)",
@@ -338,23 +304,22 @@ def build() -> None:
             interactive=False,
         )
 
-        # Streaming outputs: use generator functions so UI updates live
         gen_btn.click(
             fn=stream_generate,
             inputs=[resume_cb, workers_slider],
             outputs=pipeline_out,
         )
-        split_btn.click(
-            fn=run_split,
-            outputs=pipeline_out,
-        )
+        split_btn.click(fn=run_split, outputs=pipeline_out)
         full_btn.click(
             fn=stream_full_pipeline,
             inputs=[resume_cb, workers_slider],
             outputs=pipeline_out,
         )
 
+    # Wire dropdowns → auto-update cell info + system prompt
     for dd in [lang_dd, ind_dd, sc_dd]:
         dd.change(
-            fn=on_selection_change, inputs=[lang_dd, ind_dd, sc_dd], outputs=[cell_info, prompt_box]
+            fn=on_selection_change,
+            inputs=[lang_dd, ind_dd, sc_dd],
+            outputs=[cell_info, prompt_box],
         )

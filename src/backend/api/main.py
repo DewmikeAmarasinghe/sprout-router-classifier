@@ -19,6 +19,8 @@ import gradio as gr
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from frontend.app import build_app
+
 app = FastAPI(title="Sprout Router Classifier", version="1.0.0")
 
 app.add_middleware(
@@ -40,11 +42,5 @@ app.include_router(routes_config.router, prefix="/api/config")
 app.include_router(routes_generation.router, prefix="/api/generation")
 
 
-def _build_gradio() -> gr.Blocks:
-    from frontend.app import build_app
-
-    return build_app()
-
-
-gradio_blocks = _build_gradio()
+gradio_blocks = build_app()
 app = gr.mount_gradio_app(app, gradio_blocks, path="/ui")

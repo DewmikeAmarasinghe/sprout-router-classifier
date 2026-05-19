@@ -1,13 +1,10 @@
 """
 Pydantic models for the generation module.
 
-EvaluationResult and EvaluationBatch were removed when the LLM-as-judge
-evaluator was dropped from the pipeline. They had no callers.
-
-Remaining models:
-    LengthRange / LengthDistribution  — ScenarioConfig length specs
-    GenerationCell                     — one (language × industry × scenario) task
-    GeneratedPrompt / GenerationBatch  — structured output from the LLM
+These live at data-trust boundaries:
+- LengthRange / LengthDistribution: fraction validation
+- GenerationCell: distribution cells passed between services
+- GeneratedPrompt / GenerationBatch: shapes enforced on OpenAI API responses
 """
 
 from __future__ import annotations
@@ -22,7 +19,7 @@ FRACTION_TOLERANCE = 0.005
 
 
 class LengthRange(BaseModel):
-    """One word-count bucket with a sampling fraction and concrete examples."""
+    """One word-count range with sampling fraction and concrete examples."""
 
     min_words: Annotated[int, Field(ge=1)]
     max_words: Annotated[int, Field(ge=1)]
@@ -46,7 +43,7 @@ class LengthRange(BaseModel):
 
 
 class LengthDistribution(BaseModel):
-    """Word-count distribution for a scenario. All range fractions must sum to 1.0."""
+    """Word count distribution. All range fractions must sum to 1.0."""
 
     ranges: list[LengthRange]
 
@@ -62,10 +59,10 @@ class LengthDistribution(BaseModel):
 
 
 class GenerationCell(BaseModel):
-    """One (language, industry, scenario) triple with a target row count.
+    """One (language, industry, scenario) triple with a row count.
 
-    target_count=0 is valid for UI display purposes (all_cells_including_zero).
-    Active generation cells always have target_count >= 1.
+    target_count=0 is valid for display purposes (all_cells_including_zero).
+    Active cells for generation always have target_count >= 1.
     """
 
     language: LanguageKey
@@ -75,6 +72,7 @@ class GenerationCell(BaseModel):
 
     @property
     def cell_id(self) -> str:
+        """Unique key for checkpointing, logging, and example cache lookups."""
         return f"{self.language}__{self.industry}__{self.scenario}"
 
     @property
@@ -83,7 +81,7 @@ class GenerationCell(BaseModel):
 
 
 class GeneratedPrompt(BaseModel):
-    """A single generated training example validated on receipt from the LLM."""
+    """A single generated training example. Validated on receipt from the LLM."""
 
     text: str
     word_count: int = Field(ge=1)
@@ -91,8 +89,8 @@ class GeneratedPrompt(BaseModel):
     @model_validator(mode="after")
     def text_not_empty(self) -> GeneratedPrompt:
         self.text = self.text.strip()
-        if len(self.text) < 3:
-            raise ValueError(f"Generated text too short: {self.text!r}")
+        if not self.text:
+            raise ValueError("Generated text is empty after stripping")
         return self
 
 
