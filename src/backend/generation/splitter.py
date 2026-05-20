@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import warnings
 
 import mlflow
 import pandas as pd
@@ -11,12 +12,22 @@ from sklearn.model_selection import StratifiedShuffleSplit
 
 from backend.shared.path_resolver import get_dataset_path
 
+# Suppress harmless MLflow schema inference warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="mlflow")
+
 log = logging.getLogger(__name__)
 
 
 class DataSplitter:
     def run(self, dataset_name: str) -> dict:
-        """Split generated_raw.csv → train/val/test CSVs."""
+        """Split generated_raw.csv → train/val/test CSVs.
+
+        Uses StratifiedShuffleSplit which shuffles and stratifies by
+        label × scenario. No data leakage — splits are from mutually
+        exclusive index sets.
+
+        Split: 80% train / 10% val / 10% test
+        """
         dataset_dir = get_dataset_path(dataset_name)
         input_path = dataset_dir / "raw" / "generated_raw.csv"
 
@@ -28,6 +39,7 @@ class DataSplitter:
         df = pd.read_csv(input_path)
         log.info(f"Splitting {len(df):,} rows for '{dataset_name}'")
 
+        # Stratification key: label + scenario ensures both are balanced across splits
         df["_strat"] = df["label"].astype(str) + "__" + df["scenario"].astype(str)
 
         sss1 = StratifiedShuffleSplit(n_splits=1, test_size=0.20, random_state=42)
@@ -43,21 +55,17 @@ class DataSplitter:
         for frame in (train_df, val_df, test_df):
             frame.drop(columns=["_strat"], inplace=True)
 
-        train_path = dataset_dir / "train.csv"
-        val_path = dataset_dir / "val.csv"
-        test_path = dataset_dir / "test.csv"
-
-        train_df.to_csv(train_path, index=False)
-        val_df.to_csv(val_path, index=False)
-        test_df.to_csv(test_path, index=False)
+        train_df.to_csv(dataset_dir / "train.csv", index=False)
+        val_df.to_csv(dataset_dir / "val.csv", index=False)
+        test_df.to_csv(dataset_dir / "test.csv", index=False)
 
         log.info(f"train={len(train_df):,}  val={len(val_df):,}  test={len(test_df):,}")
 
-        self._log_to_mlflow(dataset_name, train_df, val_df, test_df)
+        log_to_mlflow(dataset_name, train_df, val_df, test_df)
 
-        stats = _build_stats(train_df, val_df, test_df, dataset_name)
+        stats = build_stats(train_df, val_df, test_df, dataset_name)
         (dataset_dir / "split_stats.json").write_text(json.dumps(stats, indent=2))
-        _print_stats(stats)
+        print_stats(stats)
         return stats
 
     @staticmethod
@@ -67,31 +75,41 @@ class DataSplitter:
         val_df: pd.DataFrame,
         test_df: pd.DataFrame,
     ) -> None:
-        try:
-            mlflow.set_experiment("phase1_data")
-            with mlflow.start_run(run_name=f"split_{dataset_name}"):
-                mlflow.log_params(
-                    {
-                        "dataset": dataset_name,
-                        "train_rows": len(train_df),
-                        "val_rows": len(val_df),
-                        "test_rows": len(test_df),
-                        "label1_ratio": round(float(train_df["label"].mean()), 3),
-                    }
-                )
-                # mlflow.data.from_pandas exists at runtime but is absent from ty stubs.
-                # Use getattr() so ty skips static analysis of this attribute.
-                _log_mlflow_datasets(dataset_name, train_df, val_df, test_df)
-        except Exception as exc:  # noqa: BLE001
-            log.warning(f"MLflow logging skipped: {exc}")
+        """Private — called internally. Kept with underscore for legacy compat."""
+        log_to_mlflow(dataset_name, train_df, val_df, test_df)
 
 
-def _log_mlflow_datasets(
+def log_to_mlflow(
     dataset_name: str,
     train_df: pd.DataFrame,
     val_df: pd.DataFrame,
     test_df: pd.DataFrame,
 ) -> None:
+    """Log split statistics to MLflow."""
+    try:
+        mlflow.set_experiment("phase1_data")
+        with mlflow.start_run(run_name=f"split_{dataset_name}"):
+            mlflow.log_params(
+                {
+                    "dataset": dataset_name,
+                    "train_rows": len(train_df),
+                    "val_rows": len(val_df),
+                    "test_rows": len(test_df),
+                    "label1_ratio": round(float(train_df["label"].mean()), 3),
+                }
+            )
+            log_mlflow_datasets(dataset_name, train_df, val_df, test_df)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"MLflow logging skipped: {exc}")
+
+
+def log_mlflow_datasets(
+    dataset_name: str,
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+) -> None:
+    """Register DataFrames as MLflow dataset inputs (best-effort)."""
     from_pandas = getattr(getattr(mlflow, "data", None), "from_pandas", None)
     if from_pandas is None:
         return
@@ -100,7 +118,14 @@ def _log_mlflow_datasets(
         mlflow.log_input(ds, context=ctx)
 
 
-def _build_stats(train: pd.DataFrame, val: pd.DataFrame, test: pd.DataFrame, name: str) -> dict:
+def build_stats(
+    train: pd.DataFrame,
+    val: pd.DataFrame,
+    test: pd.DataFrame,
+    name: str,
+) -> dict:
+    """Build a split statistics summary dict."""
+
     def info(df: pd.DataFrame) -> dict:
         return {
             "rows": len(df),
@@ -114,7 +139,7 @@ def _build_stats(train: pd.DataFrame, val: pd.DataFrame, test: pd.DataFrame, nam
     return {"dataset_name": name, "train": info(train), "val": info(val), "test": info(test)}
 
 
-def _print_stats(stats: dict) -> None:
+def print_stats(stats: dict) -> None:
     print("\n" + "─" * 60)
     print(f"Dataset: {stats['dataset_name']}")
     for split in ("train", "val", "test"):

@@ -287,7 +287,7 @@ def build() -> None:
                 outputs=train_one_out,
             )
 
-        with gr.Accordion("🚀 Run All Active Combos", open=False):
+        with gr.Accordion("🚀 Run All Active Combos", open=True):
             gr.Markdown(
                 "Runs all combinations defined in `ACTIVE_COMBOS` in "
                 "`training/classical/config.py`. ~30–60 min total. Results logged to MLflow."
@@ -297,7 +297,7 @@ def build() -> None:
             train_all_btn.click(fn=train_all_classical, inputs=dataset_box, outputs=train_all_out)
 
     # ── Transformers ──────────────────────────────────────────────────────────
-    with gr.Accordion("🤗 Transformers", open=False):
+    with gr.Accordion("🤗 Transformers", open=True):
         gr.Markdown(
             "Fine-tuned multilingual transformers (XLM-R, MuRIL, etc.).\n\n"
             "⚠ **GPU strongly recommended.** On CPU, training takes several hours per model. "
@@ -339,7 +339,7 @@ def build() -> None:
                 outputs=transformer_out,
             )
 
-        with gr.Accordion("☁ Kaggle Instructions (recommended for GPU)", open=False):
+        with gr.Accordion("☁ Kaggle Instructions (recommended for GPU)", open=True):
             gr.Markdown("""
 **Recommended order for Kaggle sessions:**
 

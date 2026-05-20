@@ -175,7 +175,7 @@ def build() -> None:
         )
 
     # ── Threshold curve ───────────────────────────────────────────────────────
-    with gr.Accordion("📈 Threshold Curve", open=False):
+    with gr.Accordion("📈 Threshold Curve", open=True):
         gr.Markdown(
             "Run `python phases/phase_8_router.py --dataset v1` to generate the curve.\n"
             "Shows how recall_1 and precision_1 change across thresholds."
@@ -185,7 +185,7 @@ def build() -> None:
         curve_btn.click(fn=load_threshold_curve, inputs=[dataset_box], outputs=curve_out)
 
     # ── Batch test ────────────────────────────────────────────────────────────
-    with gr.Accordion("📋 Batch Test Messages", open=False):
+    with gr.Accordion("📋 Batch Test Messages", open=True):
         gr.Markdown("Paste multiple messages (one per line) to route in batch.")
         batch_input = gr.Textbox(label="Messages (one per line)", lines=8)
         batch_btn = gr.Button("Route all", variant="secondary")

@@ -135,7 +135,7 @@ def build() -> None:
             outputs=[compare_table, best_summary],
         )
 
-    with gr.Accordion("💰 Cost Simulation", open=False):
+    with gr.Accordion("💰 Cost Simulation", open=True):
         gr.Markdown("Daily API cost vs routing strategy. Pricing from `config/settings.py`.")
         cost_btn = gr.Button("▶ Run Cost Simulation", variant="secondary")
         cost_table = gr.Dataframe(
@@ -145,7 +145,7 @@ def build() -> None:
         )
         cost_btn.click(fn=load_cost_sim, inputs=[dataset_box, daily_msgs], outputs=cost_table)
 
-    with gr.Accordion("🖥 CLI Reference", open=False):
+    with gr.Accordion("🖥 CLI Reference", open=True):
         gr.Code(
             value=(
                 "# Full evaluation\n"

@@ -5,6 +5,11 @@ LanguageConfig uses frozen dataclass (not Pydantic) because these are
 trusted internal definitions written by the developer, not user input.
 All training data uses English alphabet letters — romanized Sinhala/Tamil.
 is_pure_script() handles actual unicode script. Never trained on script.
+
+clarification_examples:
+    Short words/phrases used in CONTINUATION sub-type B prompts.
+    Stored here so prompt_factory.py assembles from config, not hardcoded dicts.
+    Values are plain strings (no outer quotes) — prompt_factory adds formatting.
 """
 
 from __future__ import annotations
@@ -21,9 +26,10 @@ class LanguageConfig:
     key: LanguageKey
     display_name: str
     label: int
-    instruction: str  # injected into system prompt as language guidance
-    vocab_examples: tuple[str, ...]  # romanized words in this language for reference
-    spelling_variations: bool  # whether to include typos/informal spelling in prompts
+    instruction: str
+    vocab_examples: tuple[str, ...]
+    spelling_variations: bool
+    clarification_examples: tuple[str, ...]
 
 
 LANGUAGE_CONFIGS: dict[LanguageKey, LanguageConfig] = {
@@ -38,6 +44,7 @@ LANGUAGE_CONFIGS: dict[LanguageKey, LanguageConfig] = {
         ),
         vocab_examples=(),
         spelling_variations=False,
+        clarification_examples=("help", "huh?", "what?", "I don't get it", "ok?"),
     ),
     LanguageKey.SINGLISH_LIGHT: LanguageConfig(
         key=LanguageKey.SINGLISH_LIGHT,
@@ -79,6 +86,7 @@ LANGUAGE_CONFIGS: dict[LanguageKey, LanguageConfig] = {
             "dunnoth",
         ),
         spelling_variations=True,
+        clarification_examples=("ada", "help", "what?", "oya kiwweth?"),
     ),
     LanguageKey.SINGLISH_HEAVY: LanguageConfig(
         key=LanguageKey.SINGLISH_HEAVY,
@@ -115,6 +123,7 @@ LANGUAGE_CONFIGS: dict[LanguageKey, LanguageConfig] = {
             "ape",
         ),
         spelling_variations=True,
+        clarification_examples=("ada", "neeya kiwwe?", "mokak karanne?"),
     ),
     LanguageKey.TANGLISH_LIGHT: LanguageConfig(
         key=LanguageKey.TANGLISH_LIGHT,
@@ -150,6 +159,7 @@ LANGUAGE_CONFIGS: dict[LanguageKey, LanguageConfig] = {
             "eppo",
         ),
         spelling_variations=True,
+        clarification_examples=("puriyala", "help", "sollu", "theriyala"),
     ),
     LanguageKey.TANGLISH_HEAVY: LanguageConfig(
         key=LanguageKey.TANGLISH_HEAVY,
@@ -184,5 +194,6 @@ LANGUAGE_CONFIGS: dict[LanguageKey, LanguageConfig] = {
             "theriyala",
         ),
         spelling_variations=True,
+        clarification_examples=("puriyala", "enna ithu?", "theriyala"),
     ),
 }

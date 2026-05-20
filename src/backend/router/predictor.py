@@ -5,14 +5,13 @@ RouterPredictor — three-layer routing pipeline.
     Layer 2: ML model → P(label=1)                        (1–30ms)
     Layer 3: confidence < threshold → SAFE_DEFAULT_LABEL  (0ms)
 
-The predictor wraps a trained sklearn pipeline (.pkl) or HuggingFace checkpoint.
+MODEL PATH HANDLING:
+    Classical models are saved as:
+        experiments/{dataset}/classical/models/{experiment_id}/model.pkl
 
-Usage:
-    predictor = RouterPredictor.from_pkl(
-        "experiments/v1/classical/models/tfidf_combined__lightgbm.pkl"
-    )
-    result = predictor.predict("nearest branch to me")
-    print(result.label, result.routed_to)
+    from_pkl() accepts both:
+        - A directory path  → looks for model.pkl inside it
+        - A direct .pkl file path  → opens directly
 """
 
 from __future__ import annotations
@@ -50,12 +49,31 @@ class RouterPredictor:
         path: str | Path,
         threshold_config: ThresholdConfig | None = None,
     ) -> RouterPredictor:
-        """Load a trained sklearn pipeline from a .pkl file."""
+        """Load a trained sklearn pipeline from a .pkl file or directory.
+
+        Accepts:
+            - A directory path → looks for model.pkl inside (classical trainer format)
+            - A direct .pkl file path → opens directly
+
+        Args:
+            path: Path to the model file or model directory.
+            threshold_config: Optional threshold override.
+        """
         import pickle
 
         model_path = Path(path)
+
+        # Classical trainer saves to experiments/v1/classical/models/{id}/model.pkl
+        # Accept both the directory and the file directly
+        if model_path.is_dir():
+            model_path = model_path / "model.pkl"
+
         if not model_path.exists():
-            raise FileNotFoundError(f"Model not found: {model_path}")
+            raise FileNotFoundError(
+                f"Model not found: {model_path}\n"
+                f"  Looked for: {model_path}\n"
+                f"  If this is a directory, ensure model.pkl exists inside it."
+            )
 
         with model_path.open("rb") as f:
             model: Any = pickle.load(f)  # noqa: S301
@@ -84,12 +102,7 @@ class RouterPredictor:
         return cls(model=wrapped, threshold_config=threshold_config)
 
     def predict(self, text: str) -> RouterPrediction:
-        """Route one message through the three-layer pipeline.
-
-        Layer 1: Pure Sinhala/Tamil script → always label=1 (< 0.1ms)
-        Layer 2: ML model → P(label=1)
-        Layer 3: confidence < threshold → safe default label
-        """
+        """Route one message through the three-layer pipeline."""
         if is_pure_script(text):
             return RouterPrediction(
                 label=1,
@@ -117,7 +130,6 @@ class RouterPredictor:
         )
 
     def predict_batch(self, texts: list[str]) -> list[RouterPrediction]:
-        """Route a batch of messages."""
         return [self.predict(text) for text in texts]
 
     def _get_confidence(self, text: str) -> float:
@@ -131,14 +143,13 @@ class RouterPredictor:
 
 
 class HuggingFaceWrapper:
-    """Thin wrapper around a HuggingFace model for uniform predict_proba interface."""
+    """Thin wrapper around a HuggingFace model for predict_proba interface."""
 
     def __init__(self, model: Any, tokenizer: Any) -> None:
         self._model = model
         self._tokenizer = tokenizer
 
     def predict_proba(self, text: str) -> float:
-        """Return P(label=1) for one text string."""
         import torch
         from scipy.special import softmax
 

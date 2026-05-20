@@ -4,7 +4,8 @@ Scenario configuration — one entry per routing signal.
 CONTINUATION description fix:
     Removed "puriyala" and "ada" from the scenario description text.
     These are Sinhala/Tamil words and should never appear in pure_english prompts.
-    The PromptFactory.build_continuation_subtype() handles language-aware examples.
+    The PromptFactory.build_continuation_subtype() handles language-aware examples
+    using LanguageConfig.clarification_examples.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ SCENARIO_CONFIGS: dict[ScenarioKey, ScenarioConfig] = {
         always_label_1=False,
         routing_reason=(
             "Pure English + simple intent → gpt-4o-mini handles perfectly. "
-            "Code-mixed version → gpt-4o-mini degrades."
+            "Unicode mixed version → gpt-4o-mini degrades."
         ),
         length_dist=LengthDistribution(
             ranges=[

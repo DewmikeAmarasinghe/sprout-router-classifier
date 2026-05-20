@@ -1,29 +1,14 @@
 """
 Phase 5 — Classical ML Training.
 
-Trains all (vectorizer, classifier) combinations and logs results to MLflow.
-val.csv used for evaluation. test.csv NOT accessed here.
+Trains all (vectorizer, classifier) combos in ACTIVE_COMBOS.
+All training warnings are suppressed.
 
 Usage:
-    python phases/phase_5_train_classical.py                          # all combos
-    python phases/phase_5_train_classical.py --vec tfidf_combined --clf lightgbm
-    python phases/phase_5_train_classical.py --all --dataset v1
-
-Available vectorizers:  tfidf_char, tfidf_word, tfidf_combined, word2vec, spacy
-Available classifiers:  logistic_regression, svm, lightgbm, xgboost, catboost
-
-Recommended order:
-    1. Run --all (TF-IDF combos are fast, ~2 min each)
-    2. Check mlflow ui to see which combo has best recall_1 + MCC
-    3. Optionally run individual combos with custom params
-
-For spaCy vectorizer:
-    python -m spacy download en_core_web_md   (run once)
-
-After this, run:
-    python phases/phase_6_train_transformers.py
-
-Key metric: recall_1 >= 0.97 is required for production deployment.
+    python phases/phase_5_train_classical.py --all
+    python phases/phase_5_train_classical.py --vectorizer tfidf_combined --classifier svm
+    python phases/phase_5_train_classical.py --all --hpo --n-trials 20
+    python phases/phase_5_train_classical.py --dataset v2 --all
 """
 
 from __future__ import annotations
@@ -31,12 +16,18 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import warnings
 from pathlib import Path
+
+# Suppress before any sklearn/mlflow/lightgbm imports
+warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
+warnings.filterwarnings("ignore", category=FutureWarning, module="sklearn")
+warnings.filterwarnings("ignore", category=UserWarning, module="mlflow")
+warnings.filterwarnings("ignore", category=UserWarning, module="lightgbm")
 
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
-
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 logging.basicConfig(
@@ -44,55 +35,50 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
     datefmt="%H:%M:%S",
 )
-log = logging.getLogger(__name__)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--dataset", default="v1", help="Dataset version")
-    parser.add_argument("--vec", default=None, help="Vectorizer key")
-    parser.add_argument("--clf", default=None, help="Classifier key")
-    parser.add_argument("--all", action="store_true", help="Run all ACTIVE_COMBOS")
-    parser.add_argument(
-        "--list", action="store_true", help="List available vectorizers and classifiers"
-    )
+    parser.add_argument("--dataset", default="v1")
+    parser.add_argument("--all", action="store_true")
+    parser.add_argument("--vectorizer", default=None)
+    parser.add_argument("--classifier", default=None)
+    parser.add_argument("--hpo", action="store_true")
+    parser.add_argument("--n-trials", type=int, default=10)
     args = parser.parse_args()
 
-    from backend.training.classical.config import (
-        ACTIVE_COMBOS,
-        CLASSIFIER_REGISTRY,
-        VECTORIZER_REGISTRY,
-    )
     from backend.training.classical.trainer import ClassicalMLTrainer
-
-    if args.list:
-        print("\nVectorizers:")
-        for k, v in VECTORIZER_REGISTRY.items():
-            print(f"  {k:<20} {v.display_name}")
-        print("\nClassifiers:")
-        for k, v in CLASSIFIER_REGISTRY.items():
-            print(f"  {k:<25} {v.display_name}")
-        print(f"\nActive combos ({len(ACTIVE_COMBOS)}):")
-        for vec, clf in ACTIVE_COMBOS:
-            print(f"  {vec} + {clf}")
-        return
 
     trainer = ClassicalMLTrainer()
 
-    if args.all or (not args.vec and not args.clf):
-        log.info(f"Running all {len(ACTIVE_COMBOS)} active combos on dataset '{args.dataset}'")
+    if args.all:
         trainer.train_all_combos(args.dataset)
 
-    elif args.vec and args.clf:
-        log.info(f"Running: {args.vec} + {args.clf} on dataset '{args.dataset}'")
-        result = trainer.train_experiment(args.dataset, args.vec, args.clf)
-        print(f"\nResult: {result.metrics.summary_line()}")
-        print(f"Model:  {result.model_path}")
+    elif args.vectorizer and args.classifier:
+        if args.hpo:
+            from backend.training.classical.hpo import ClassicalHPORunner
+
+            # HPOResult has .best_params (dict) and .best_value (float)
+            hpo_result = ClassicalHPORunner().run(
+                args.dataset,
+                args.vectorizer,
+                args.classifier,
+                n_trials=args.n_trials,
+            )
+            trainer.train_experiment(
+                args.dataset,
+                args.vectorizer,
+                args.classifier,
+                classifier_params=hpo_result.best_params,
+            )
+        else:
+            trainer.train_experiment(args.dataset, args.vectorizer, args.classifier)
 
     else:
-        parser.error("Provide both --vec and --clf, or use --all, or use --list")
+        parser.error("Provide --all or both --vectorizer and --classifier")
 
 
 if __name__ == "__main__":

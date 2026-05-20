@@ -1,8 +1,13 @@
 """
 Generation tab panel.
 
-One shared (Language × Industry × Scenario) selection drives all sections.
-Live progress streamed into the UI as cells complete.
+Three distinct preview sections plus full pipeline controls:
+  1. System Prompt Preview   — context sent to the model (open=True)
+  2. User Prompt Preview     — per-turn user messages (open=True)
+  3. Dry Run                 — generate and show messages (open=True)
+  4. Full Pipeline           — generate + split controls (open=True)
+
+All accordions default to open=True per project coding standards.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ import gradio as gr
 from backend.config.distribution import DISTRIBUTION
 from backend.config.keys import IndustryKey, LanguageKey, ScenarioKey
 from backend.generation.example_store import example_store
+from backend.generation.generator import CONTINUE_USER_MSG, build_first_turn_user_msg
 from backend.generation.prompt_factory import PROMPT_FACTORY
 from backend.shared.settings_manager import settings_manager
 
@@ -33,7 +39,6 @@ def scenario_choices() -> list[str]:
 
 
 def get_cell_info(language: str, industry: str, scenario: str) -> str:
-    """Return target row count and fractions for the selected cell."""
     try:
         lang_b = DISTRIBUTION.get_language(LanguageKey(language))
         if not lang_b:
@@ -62,28 +67,68 @@ def get_cell_info(language: str, industry: str, scenario: str) -> str:
         return f"Error: {exc}"
 
 
-def on_selection_change(language: str, industry: str, scenario: str) -> tuple[str, str]:
-    """Auto-update cell info and system prompt on any dropdown change."""
+def on_selection_change(language: str, industry: str, scenario: str) -> tuple[str, str, str, str]:
     return (
         get_cell_info(language, industry, scenario),
-        preview_prompt(language, industry, scenario),
+        preview_system_prompt(language, industry, scenario),
+        preview_first_user_msg(language, industry, scenario),
+        preview_continuation_msg(language, industry, scenario),
     )
 
 
-def preview_prompt(language: str, industry: str, scenario: str) -> str:
-    """Build the system prompt for the selected cell (no API call)."""
+def preview_system_prompt(language: str, industry: str, scenario: str) -> str:
     try:
         return PROMPT_FACTORY.build_preview(
-            LanguageKey(language),
-            IndustryKey(industry),
-            ScenarioKey(scenario),
+            LanguageKey(language), IndustryKey(industry), ScenarioKey(scenario)
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"Error: {exc}"
+
+
+def preview_first_user_msg(language: str, industry: str, scenario: str) -> str:
+    try:
+        lang_b = DISTRIBUTION.get_language(LanguageKey(language))
+        ind_b = lang_b.get_industry(IndustryKey(industry)) if lang_b else None
+        sc_b = ind_b.get_scenario(ScenarioKey(scenario)) if ind_b else None
+        total = sc_b.computed_count if sc_b else 50
+
+        batch_size = settings_manager.get("GENERATION_BATCH_SIZE")
+        n = min(batch_size, total)
+        return build_first_turn_user_msg(n=n, total_target=total, batch_size=batch_size)
+    except Exception as exc:  # noqa: BLE001
+        return f"Error: {exc}"
+
+
+def preview_continuation_msg(language: str, industry: str, scenario: str) -> str:
+    try:
+        lang_b = DISTRIBUTION.get_language(LanguageKey(language))
+        ind_b = lang_b.get_industry(IndustryKey(industry)) if lang_b else None
+        sc_b = ind_b.get_scenario(ScenarioKey(scenario)) if ind_b else None
+        total = sc_b.computed_count if sc_b else 200
+
+        batch_size = settings_manager.get("GENERATION_BATCH_SIZE")
+        generated = batch_size * 4
+        remaining = total - generated
+        n = min(batch_size, remaining)
+
+        if remaining <= 0:
+            return "(Cell is small — only 1 batch needed, no continuation turns)"
+
+        return CONTINUE_USER_MSG.format(
+            turn=5,
+            generated=generated,
+            target=total,
+            n=n,
         )
     except Exception as exc:  # noqa: BLE001
         return f"Error: {exc}"
 
 
 def dry_run(language: str, industry: str, scenario: str, n: int) -> str:
-    """Generate N sentences for the selected cell. Nothing is saved."""
+    """Generate N messages and return only the generated output with word counts.
+
+    Nothing is saved to disk.
+    """
     try:
         from backend.generation.generator import GeneratorService
         from backend.generation.pymodels import GenerationCell
@@ -95,18 +140,25 @@ def dry_run(language: str, industry: str, scenario: str, n: int) -> str:
             target_count=int(n),
         )
         rows = GeneratorService().generate_cell(cell)
+
         if not rows:
             return "No rows generated. Check OPENAI_API_KEY in .env"
-        lines = [f"Generated {len(rows)} rows  label={rows[0]['label']}\n"]
-        lines += [f"{i:2}. [{row['word_count']}w] {row['text']}" for i, row in enumerate(rows, 1)]
+
+        label = rows[0]["label"]
+        lines = [
+            f"Generated {len(rows)} rows  │  label={label}  "
+            f"({'gpt-4o-mini' if label == 0 else 'gpt-4o'})\n",
+        ]
+        for i, row in enumerate(rows, 1):
+            lines.append(f"  {i:2}. [{row['word_count']}w]  {row['text']}")
+
         return "\n".join(lines)
     except Exception as exc:  # noqa: BLE001
         return f"Error: {exc}"
 
 
 def run_split() -> str:
-    """Run DataSplitter on the active dataset version."""
-    dataset = settings_manager.get("DATASET_VERSION")
+    dataset: str = settings_manager.get("DATASET_VERSION")
     try:
         from backend.generation.splitter import DataSplitter
 
@@ -121,12 +173,8 @@ def run_split() -> str:
         return f"Error: {exc}"
 
 
-# ── Streaming generation ──────────────────────────────────────────────────────
-
-
 def stream_generate(resume: bool, workers: int) -> Generator[str, None, None]:
-    """Generator: streams per-cell progress into the output textbox."""
-    dataset = settings_manager.get("DATASET_VERSION")
+    dataset: str = settings_manager.get("DATASET_VERSION")
     updates: queue.SimpleQueue[str] = queue.SimpleQueue()
 
     def thread_target() -> None:
@@ -163,8 +211,7 @@ def stream_generate(resume: bool, workers: int) -> Generator[str, None, None]:
 
 
 def stream_full_pipeline(resume: bool, workers: int) -> Generator[str, None, None]:
-    """Generator: generate → split with live progress."""
-    dataset = settings_manager.get("DATASET_VERSION")
+    dataset: str = settings_manager.get("DATASET_VERSION")
     updates: queue.SimpleQueue[str] = queue.SimpleQueue()
 
     def thread_target() -> None:
@@ -218,11 +265,10 @@ def stream_full_pipeline(resume: bool, workers: int) -> Generator[str, None, Non
 
 
 def build() -> None:
-    """Build the Generation tab. One selection set, all sections react."""
+    """Build the Generation tab. All accordions open=True per coding standards."""
 
     gr.Markdown("Select **(Language × Industry × Scenario)**. All sections update automatically.")
 
-    # ── Shared selection ─────────────────────────────────────────────────────
     with gr.Row():
         lang_dd = gr.Dropdown(
             choices=language_choices(), value=language_choices()[0], label="Language"
@@ -241,55 +287,83 @@ def build() -> None:
         max_lines=1,
     )
 
-    # ── System prompt preview ────────────────────────────────────────────────
-    # Examples from examples.json are already embedded in this preview.
-    # Run `python cli.py examples-all --workers 10` to populate cell-specific examples.
-    with gr.Accordion("🔍 System Prompt Preview", open=True):
+    with gr.Accordion("🗂 System Prompt Preview", open=True):
         gr.Markdown(
-            "Auto-updates on selection change. Includes examples from `examples.json` "
-            "(LengthRange fallback until you run `python cli.py examples-all`)."
+            "Context the model receives at the start of every session: language mandate, "
+            "industry info, scenario definition, length distribution, examples, and rules.\n\n"
+            "The 'Generate N messages' user message is NOT shown here — it's added per-turn by the generator.\n\n"
+            "Run `python cli.py examples-all --workers 10` to populate cell-specific examples."
         )
-        prompt_box = gr.Textbox(
-            value=preview_prompt(
+        system_prompt_box = gr.Textbox(
+            value=preview_system_prompt(
                 language_choices()[0], industry_choices()[0], scenario_choices()[0]
             ),
-            label="System prompt (first turn)",
-            lines=40,
+            label="System prompt (context only)",
+            lines=35,
             interactive=False,
         )
 
-    # ── Dry run ──────────────────────────────────────────────────────────────
-    with gr.Accordion("🧪 Dry Run — test one cell", open=True):
-        gr.Markdown("Generate N sentences for the selected cell. **Nothing is saved.**")
-        dry_n = gr.Slider(minimum=3, maximum=50, value=5, step=1, label="N sentences")
+    with gr.Accordion("💬 User Prompt Preview (real per-turn requests)", open=True):
+        gr.Markdown(
+            "What gets sent as the USER MESSAGE each turn. The system prompt stays fixed; "
+            "only user messages change per batch.\n\n"
+            "**Turn 1** sets session scope (total target + batch count).\n"
+            "**Turn 2+** shows progress so the model understands how much variety is still needed."
+        )
+        with gr.Row():
+            first_turn_box = gr.Textbox(
+                value=preview_first_user_msg(
+                    language_choices()[0], industry_choices()[0], scenario_choices()[0]
+                ),
+                label="Turn 1 — First batch user message",
+                lines=5,
+                interactive=False,
+            )
+            continuation_box = gr.Textbox(
+                value=preview_continuation_msg(
+                    language_choices()[0], industry_choices()[0], scenario_choices()[0]
+                ),
+                label="Turn 5 — Continuation batch user message (example)",
+                lines=14,
+                interactive=False,
+            )
+
+    with gr.Accordion("🧪 Dry Run — generate and preview messages", open=True):
+        gr.Markdown(
+            "Generate N messages for the selected cell. **Nothing is saved.**\n\n"
+            "Shows each generated message with its word count and routing label."
+        )
+        dry_n = gr.Slider(minimum=3, maximum=50, value=10, step=1, label="N messages to generate")
         dry_btn = gr.Button("🧪 Generate (no save)", variant="secondary")
-        dry_out = gr.Textbox(label="Output", lines=20, interactive=False)
+        dry_out = gr.Textbox(
+            label="Generated messages  [word count per message]",
+            lines=20,
+            interactive=False,
+        )
         dry_btn.click(fn=dry_run, inputs=[lang_dd, ind_dd, sc_dd, dry_n], outputs=dry_out)
 
-    # ── Full pipeline ────────────────────────────────────────────────────────
     with gr.Accordion("🚀 Full Pipeline", open=True):
         dataset = settings_manager.get("DATASET_VERSION")
         cp_every = settings_manager.get("CHECKPOINT_EVERY")
         max_w = settings_manager.get("MAX_GENERATION_WORKERS")
 
         gr.Markdown(
-            f"**Dataset:** `{dataset}`  |  "
-            f"**Max workers:** {max_w} (hard cap — higher causes rate limit errors)\n\n"
-            f"Checkpoint every **{cp_every:,}** rows. "
-            "Live progress shown below as cells complete.\n\n"
-            "⚠️  Start server **without `--reload`** — file watcher interrupts generation.\n\n"
-            "**Resume** = skip completed cells. Use only after an interrupted run."
+            f"**Dataset:** `{dataset}`  |  **Max workers:** {max_w}\n\n"
+            f"Checkpoint every **{cp_every:,}** rows. Live progress updates as cells complete.\n\n"
+            "⚠️ Start server **without `--reload`** — file watcher interrupts generation.\n\n"
+            "**Resume** = skip completed cells (use only after Ctrl+C).\n"
+            "**Fill gaps** = CLI: `python phases/phase_2_generate.py --fill-gaps --workers 6`"
         )
 
         workers_slider = gr.Slider(
             minimum=1,
             maximum=10,
-            value=10,
+            value=7,
             step=1,
-            label="Workers (parallel cells, 1–10)",
+            label="Workers (recommend 7 — 10 hits rate limits on large cells)",
         )
         resume_cb = gr.Checkbox(
-            label="Resume from checkpoint (only if previous run was interrupted)",
+            label="Resume from checkpoint (use only after an interrupted run)",
             value=False,
         )
 
@@ -304,22 +378,15 @@ def build() -> None:
             interactive=False,
         )
 
-        gen_btn.click(
-            fn=stream_generate,
-            inputs=[resume_cb, workers_slider],
-            outputs=pipeline_out,
-        )
+        gen_btn.click(fn=stream_generate, inputs=[resume_cb, workers_slider], outputs=pipeline_out)
         split_btn.click(fn=run_split, outputs=pipeline_out)
         full_btn.click(
-            fn=stream_full_pipeline,
-            inputs=[resume_cb, workers_slider],
-            outputs=pipeline_out,
+            fn=stream_full_pipeline, inputs=[resume_cb, workers_slider], outputs=pipeline_out
         )
 
-    # Wire dropdowns → auto-update cell info + system prompt
     for dd in [lang_dd, ind_dd, sc_dd]:
         dd.change(
             fn=on_selection_change,
             inputs=[lang_dd, ind_dd, sc_dd],
-            outputs=[cell_info, prompt_box],
+            outputs=[cell_info, system_prompt_box, first_turn_box, continuation_box],
         )

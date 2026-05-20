@@ -65,3 +65,7 @@ known-first-party = ["backend", "frontend"]
 "src/backend/api/main.py" = ["E402"]  # load_dotenv() must precede all imports
 "cli.py"      = ["E402"]              # sys.path.insert before backend imports
 "phases/*.py" = ["E402"]
+"kaggle_train_transformers.py" = ["E402", "E501", "F401"]
+
+[tool.ty.src]
+exclude = ["kaggle_train_transformers.py"]

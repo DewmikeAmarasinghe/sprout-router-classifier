@@ -1,12 +1,17 @@
 """
-PromptFactory — builds training data generation prompts from config components.
+PromptFactory — assembles training data generation system prompts from config data only.
 
-IMPROVEMENTS:
-- DO NOT GENERATE shows ALL other scenarios (not just anti_scenario_keys)
-- No duplicate TASK + SUB-TYPE sections
-- Language-aware sub-type examples — "ada"/"puriyala" never in pure_english prompts
-- Explicit OUTPUT RULES preventing "Generate a..." meta-outputs
-- Vocabulary guidance + typo allowance
+All content injected into prompts comes from:
+  LANGUAGE_CONFIGS  — instruction, vocab_examples, clarification_examples
+  INDUSTRY_CONFIGS  — display_name, description, product_examples, location_types
+  SCENARIO_CONFIGS  — display_name, description, routing_reason, length_dist
+
+Nothing is hardcoded in this file beyond structural constants (PLATFORM_STYLES,
+CONTEXT_HEADER, SCENARIOS_WITH_SUBTYPES) which are prompt scaffolding, not
+cell-specific data.
+
+build() returns the SYSTEM PROMPT only.
+The user message ("Generate exactly N messages.") is added by generator.py.
 """
 
 from __future__ import annotations
@@ -33,24 +38,18 @@ Deployed on: WhatsApp Business, Instagram DMs, Facebook Messenger, Viber, websit
 
 Binary router labels:
   label=0 → gpt-4o-mini  (pure English, simple, no complexity signals)
-  label=1 → gpt-4o       (code-mixed, complex, sensitive, needs spatial/emotional reasoning)\
+  label=1 → gpt-4o       (Unicode mixed, complex, sensitive, needs spatial/emotional reasoning)\
 """
-
-# Language-appropriate short clarification words for CONTINUATION sub-type B.
-# Prevents Sinhala/Tamil words appearing in pure_english prompts.
-CLARIFICATION_WORDS_BY_LANGUAGE: dict[LanguageKey, list[str]] = {
-    LanguageKey.PURE_ENGLISH: ['"help"', '"huh?"', '"what?"', '"I don\'t get it"', '"ok?"'],
-    LanguageKey.SINGLISH_LIGHT: ['"ada"', '"help"', '"what?"', '"oya kiwweth?"'],
-    LanguageKey.SINGLISH_HEAVY: ['"ada"', '"neeya kiwwe?"', '"mokak karanne?"'],
-    LanguageKey.TANGLISH_LIGHT: ['"puriyala"', '"help"', '"sollu"', '"theriyala"'],
-    LanguageKey.TANGLISH_HEAVY: ['"puriyala"', '"enna ithu?"', '"theriyala"'],
-}
 
 SCENARIOS_WITH_SUBTYPES: frozenset[ScenarioKey] = frozenset({ScenarioKey.CONTINUATION})
 
 
 class PromptFactory:
-    """Singleton builder — all generation prompts are built here."""
+    """Singleton — all generation system prompts are built here.
+
+    build() returns the SYSTEM PROMPT only.
+    The user message ("Generate exactly N messages.") is added by generator.py.
+    """
 
     def build(
         self,
@@ -58,10 +57,10 @@ class PromptFactory:
         industry: IndustryKey,
         scenario: ScenarioKey,
         examples: list[str],
-        n: int,
         platform_style: str,
     ) -> str:
-        return assemble_prompt(language, industry, scenario, examples, n, platform_style)
+        """Build the system prompt for a generation cell. No 'Generate N' instruction."""
+        return assemble_prompt(language, industry, scenario, examples, platform_style)
 
     def build_preview(
         self,
@@ -69,11 +68,12 @@ class PromptFactory:
         industry: IndustryKey,
         scenario: ScenarioKey,
     ) -> str:
+        """Build system prompt preview for Gradio UI. No API call."""
         from backend.generation.example_store import example_store
 
         examples = example_store.get(language, industry, scenario)
         return assemble_prompt(
-            language, industry, scenario, examples, n=50, platform_style=PLATFORM_STYLES[0]
+            language, industry, scenario, examples, platform_style=PLATFORM_STYLES[0]
         )
 
 
@@ -85,13 +85,9 @@ def assemble_prompt(
     industry: IndustryKey,
     scenario: ScenarioKey,
     examples: list[str],
-    n: int,
     platform_style: str,
 ) -> str:
-    lang_cfg = LANGUAGE_CONFIGS[language]
-    ind_cfg = INDUSTRY_CONFIGS[industry]
     sc_cfg = SCENARIO_CONFIGS[scenario]
-
     is_always_1 = sc_cfg.always_label_1 or language != LanguageKey.PURE_ENGLISH
     label_str = "1 (always)" if is_always_1 else "0"
 
@@ -99,8 +95,8 @@ def assemble_prompt(
         CONTEXT_HEADER,
         f"PLATFORM: {platform_style}",
         cell_box(language, industry, scenario, label_str),
-        build_industry_section(ind_cfg),
-        build_language_section(language, lang_cfg),
+        build_industry_section(industry),
+        build_language_section(language),
         build_scenario_section(sc_cfg, label_str),
         build_length_section(sc_cfg),
     ]
@@ -112,13 +108,16 @@ def assemble_prompt(
         sections.append(build_examples_section(language, industry, scenario, examples))
 
     sections.append(build_anti_scenarios_section(sc_cfg))
-    sections.append(build_output_rules(n, platform_style))
+    sections.append(build_output_rules(language, industry, scenario, platform_style))
 
     return "\n\n".join(sections)
 
 
 def cell_box(
-    language: LanguageKey, industry: IndustryKey, scenario: ScenarioKey, label_str: str
+    language: LanguageKey,
+    industry: IndustryKey,
+    scenario: ScenarioKey,
+    label_str: str,
 ) -> str:
     line = f"  GENERATING FOR:  {language}  ×  {industry}  ×  {scenario}"
     width = max(len(line) + 2, 60)
@@ -126,22 +125,31 @@ def cell_box(
     return f"╔{bar}╗\n{line}\n  Label:  {label_str}\n╚{bar}╝"
 
 
-def build_industry_section(ind_cfg: object) -> str:
-    lines = ["── INDUSTRY ──"]
-    lines.append(f"  {getattr(ind_cfg, 'display_name', '')}: {getattr(ind_cfg, 'description', '')}")
-    if loc := getattr(ind_cfg, "location_terms", None):
-        lines.append(f"  Location terms: {', '.join(loc)}")
-    if dom := getattr(ind_cfg, "domain_terms", None):
-        lines.append(f"  Domain terms:   {', '.join(dom)}")
-    if plat := getattr(ind_cfg, "platform", None):
-        lines.append(f"  Platform:       {plat}")
-    return "\n".join(lines)
+def build_industry_section(industry: IndustryKey) -> str:
+    """Inject display name, description, domain terms, and location types from IndustryConfig."""
+    ind_cfg = INDUSTRY_CONFIGS[industry]
+    return (
+        "── INDUSTRY ──\n"
+        f"  {ind_cfg.display_name}: {ind_cfg.description}\n"
+        f"  Domain terms:   {', '.join(ind_cfg.product_examples[:8])}\n"
+        f"  Location types: {', '.join(ind_cfg.location_types)}"
+    )
 
 
-def build_language_section(language: LanguageKey, lang_cfg: object) -> str:
-    desc = getattr(lang_cfg, "description", "")
-    display = getattr(lang_cfg, "display_name", language)
-    lines = ["── LANGUAGE MANDATE ──", f"  {display}: {desc}"]
+def build_language_section(language: LanguageKey) -> str:
+    """Inject the full language instruction from LanguageConfig.instruction.
+
+    Previously broken: used getattr(lang_cfg, 'description', '') which returned ''
+    since LanguageConfig has no description field — the correct field is instruction.
+    This meant singlish_light's '1-3 romanized words' and singlish_heavy's
+    '60-80% Sinhala' guidance were completely absent from all generated prompts.
+    """
+    lang_cfg = LANGUAGE_CONFIGS[language]
+    lines = [
+        "── LANGUAGE MANDATE ──",
+        f"  {lang_cfg.display_name}: ",
+        f"  {lang_cfg.instruction}",
+    ]
 
     if language == LanguageKey.PURE_ENGLISH:
         lines.append(
@@ -161,6 +169,12 @@ def build_language_section(language: LanguageKey, lang_cfg: object) -> str:
 
 
 def build_scenario_section(sc_cfg: ScenarioConfig, label_str: str) -> str:
+    """Inject scenario display name, description, label, and routing_reason from ScenarioConfig.
+
+    routing_reason is used verbatim from the config — no language-specific overrides.
+    The routing_reason for SIMPLE_TRANSACTIONAL already covers both cases:
+    pure English (first sentence) and Unicode mixed (second sentence).
+    """
     return (
         f"── TASK: {sc_cfg.display_name} ──\n"
         f"  {sc_cfg.description}\n"
@@ -185,10 +199,14 @@ def build_subtype_section(scenario: ScenarioKey, language: LanguageKey) -> str:
 
 
 def build_continuation_subtype(language: LanguageKey) -> str:
-    clarif = CLARIFICATION_WORDS_BY_LANGUAGE.get(
-        language, CLARIFICATION_WORDS_BY_LANGUAGE[LanguageKey.PURE_ENGLISH]
-    )
-    clarif_str = ", ".join(clarif[:4])
+    """Build continuation sub-type section using clarification_examples from LanguageConfig.
+
+    Reads from LANGUAGE_CONFIGS[language].clarification_examples — no hardcoded dict.
+    Values are plain strings; formatted with quotes here for the prompt.
+    """
+    lang_cfg = LANGUAGE_CONFIGS[language]
+    clarif = [f'"{ex}"' for ex in lang_cfg.clarification_examples[:4]]
+    clarif_str = ", ".join(clarif)
     lang_label = language.replace("_", " ")
     return (
         "── SUB-TYPE MIX ──\n"
@@ -216,8 +234,7 @@ def build_examples_section(
 
 
 def build_anti_scenarios_section(sc_cfg: ScenarioConfig) -> str:
-    """Show ALL other scenarios — not just anti_scenario_keys — so the model
-    clearly understands what it must NOT generate."""
+    """Show ALL other scenarios so the model knows exactly what NOT to generate."""
     lines = [
         "── DO NOT GENERATE ──",
         "  ONLY generate the target scenario above. Every other scenario is off-limits:",
@@ -232,20 +249,32 @@ def build_anti_scenarios_section(sc_cfg: ScenarioConfig) -> str:
     return "\n".join(lines)
 
 
-def build_output_rules(n: int, platform: str) -> str:
+def build_output_rules(
+    language: LanguageKey,
+    industry: IndustryKey,
+    scenario: ScenarioKey,
+    platform: str,
+) -> str:
+    """Build output rules section. All label text comes from config lookups."""
+    lang_display = LANGUAGE_CONFIGS[language].display_name
+    ind_display = INDUSTRY_CONFIGS[industry].display_name
+    sc_display = SCENARIO_CONFIGS[scenario].display_name
+
     return (
         "── OUTPUT RULES ──\n"
         f"  Write ACTUAL customer messages as typed in {platform}.\n\n"
-        "  1. Each 'text' must be the raw customer message — NOT an instruction or description.\n"
-        '     WRONG: "Generate a 1-6 word message about checkout error."\n'
-        '     CORRECT: "Still shows error."\n\n'
-        "  2. Use everyday vocabulary real customers use in chat. Avoid formal business terms.\n"
+        f"  1. Each 'text' must be a probable message a real customer would send to a\n"
+        f"     Sprout chatbot ({lang_display} × {ind_display} × {sc_display}).\n"
+        f"     NOT a meta-instruction asking to generate something. NOT a description.\n"
+        f'     WRONG: "Generate a short message asking about order status."\n'
+        f'     WRONG: "A customer asking about their delivery."\n'
+        f"     CORRECT: \"My order hasn't arrived, it's been 3 days.\"\n\n"
+        "  2. Use everyday vocabulary real customers use in chat. Avoid formal language.\n"
         '     WRONG: "The checkout flow exhibits persistent failures requiring escalation."\n'
         '     CORRECT: "It keeps failing when I try to pay."\n\n'
         "  3. Vary specifics — mention products, actions, places, times.\n"
         '     e.g. "blue dress", "promo code SAVE20", "saree in XL", "Colombo"\n\n'
-        "  4. Occasional realistic typos (1–2 per 50 messages).\n"
+        "  4. Occasional realistic typos (1–2 per batch).\n"
         '     e.g. "stil shows error", "chekcout not wrking"\n\n'
-        f'Return ONLY valid JSON: {{"prompts": [{{"text": "...", "word_count": N}}, ...]}}\n'
-        f"Generate exactly {n} messages."
+        f'Return ONLY this JSON: {{"prompts": [{{"text": "..."}}]}}'
     )

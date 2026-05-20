@@ -1,43 +1,50 @@
 """
-Application settings. Edit here to tune behavior across all phases and the Gradio UI.
-All values are accessed via settings_manager.get("KEY") — never import this file directly.
+Flat configuration constants for the Sprout router classifier.
 
-RATE LIMIT MANAGEMENT:
-    gpt-5-nano TPM limit: 200,000 tokens/min.
-    At 10 workers and batch_size=50, peak usage can hit 10 × 28,950 = 289,500 TPM.
-    PAUSE_AFTER_N_CELLS: pause all threads after every N completed cells.
-    CHECKPOINT_PAUSE_SECONDS: how long to pause (seconds).
-    Default: pause 60s after every 10 cells — keeps peak TPM well under 200k.
+All values are read via settings_manager.get("KEY").
+Sensitive values (API keys, DB passwords) go in .env — never here.
+
+PAUSE TUNING:
+    PAUSE_AFTER_N_CELLS=2 means all worker threads block before their next API
+    call after every 2 cells complete. In-flight calls finish normally (responses
+    already in transit arrive); only NEW outgoing calls are gated.
+
+    At 7 workers, 2 cells typically complete every ~20-40s. Combined with a 90s
+    pause this gives ~2 min of breathing room per cycle — enough for the 200k
+    TPM window to reset between bursts of concurrent multi-turn calls.
+
+    The 429 storms visible in logs happen when large cells (20+ turns) run
+    simultaneously and accumulate token usage. Pausing every 2 cells catches
+    pressure before it snowballs. The while-loop generator recovers failed turns
+    automatically — occasional 429s do not cause permanent row loss.
 """
 
-# ── Dataset & generation ──────────────────────────────────────────────────────
-DATASET_VERSION: str = "v1"
-GENERATION_LLM: str = "gpt-5-nano"
-GENERATION_BATCH_SIZE: int = 50
-CHECKPOINT_EVERY: int = 500
-MAX_GENERATION_WORKERS: int = 10  # hard cap — higher values hit TPM rate limits
+# ── Dataset ───────────────────────────────────────────────────────────────────
+DATASET_VERSION = "v1"
 
-# Rate limit protection
-PAUSE_AFTER_N_CELLS: int = 10  # pause every N completed cells
-CHECKPOINT_PAUSE_SECONDS: int = 60  # seconds to pause
+# ── Generation ────────────────────────────────────────────────────────────────
+GENERATION_LLM = "gpt-5-nano"  # model used to generate training data
+GENERATION_BATCH_SIZE = 50  # messages requested per API call / turn
+
+# ── Generation concurrency and rate-limit protection ──────────────────────────
+MAX_GENERATION_WORKERS = 10  # hard cap — ThreadPoolExecutor max_workers
+PAUSE_AFTER_N_CELLS = 2  # pause all workers after every N cells complete
+CHECKPOINT_PAUSE_SECONDS = 90  # seconds to pause (all workers blocked) per cycle
+CHECKPOINT_EVERY = 500  # write checkpoint.csv every ~N new rows
 
 # ── Router ────────────────────────────────────────────────────────────────────
-CONFIDENCE_THRESHOLD: float = 0.6
-SAFE_DEFAULT_LABEL: int = 1
+CONFIDENCE_THRESHOLD = 0.70  # default routing threshold (tuned by phase_8)
+SAFE_DEFAULT_LABEL = 1  # label to use when model confidence < threshold
+# 1 = gpt-4o (safe default — never under-routes)
 
-# ── Training: transformers ────────────────────────────────────────────────────
-TRANSFORMER_MAX_LENGTH: int = 64
-TRANSFORMER_NUM_EPOCHS: int = 3
-TRANSFORMER_LEARNING_RATE: float = 2e-5
-TRANSFORMER_WARMUP_RATIO: float = 0.06
-TRANSFORMER_WEIGHT_DECAY: float = 0.01
-TRANSFORMER_BATCH_SIZE: int = 32
-TRANSFORMER_FP16: bool = True
+# ── Evaluation ────────────────────────────────────────────────────────────────
+PRODUCTION_RECALL_THRESHOLD = 0.97  # minimum recall_1 to pass production gate
+DAILY_MESSAGES_ESTIMATE = 10_000  # used in cost simulation
 
-# ── API pricing (USD per 1M tokens) ──────────────────────────────────────────
-GPT4O_INPUT_PER_1M: float = 2.50
-GPT4O_OUTPUT_PER_1M: float = 10.00
-GPT4O_CACHED_INPUT_PER_1M: float = 1.25
-GPT4O_MINI_INPUT_PER_1M: float = 0.15
-GPT4O_MINI_OUTPUT_PER_1M: float = 0.60
-GPT4O_MINI_CACHED_INPUT_PER_1M: float = 0.075
+# ── API pricing (USD per 1M tokens, as of mid-2025) ──────────────────────────
+GPT4O_INPUT_PER_1M = 2.50
+GPT4O_OUTPUT_PER_1M = 10.00
+GPT4O_MINI_INPUT_PER_1M = 0.15
+GPT4O_MINI_OUTPUT_PER_1M = 0.60
+AVG_INPUT_TOKENS = 200
+AVG_OUTPUT_TOKENS = 150
