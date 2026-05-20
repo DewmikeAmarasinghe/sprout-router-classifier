@@ -1,0 +1,75 @@
+{
+  "dataset_name": "v1",
+  "train": {
+    "rows": 46923,
+    "label_0": 7887,
+    "label_1": 39036,
+    "label_1_ratio": 0.832,
+    "scenarios": {
+      "simple_transactional": 15367,
+      "complex_task": 5618,
+      "escalation": 5270,
+      "continuation": 4563,
+      "location_proximity": 4342,
+      "sensitive_context": 3751,
+      "named_location": 3513,
+      "response_language": 2477,
+      "location_relative": 2022
+    },
+    "languages": {
+      "pure_english": 16544,
+      "singlish_light": 13201,
+      "singlish_heavy": 7907,
+      "tanglish_light": 5060,
+      "tanglish_heavy": 4211
+    }
+  },
+  "val": {
+    "rows": 5865,
+    "label_0": 986,
+    "label_1": 4879,
+    "label_1_ratio": 0.832,
+    "scenarios": {
+      "simple_transactional": 1920,
+      "complex_task": 702,
+      "escalation": 659,
+      "continuation": 570,
+      "location_proximity": 543,
+      "sensitive_context": 469,
+      "named_location": 440,
+      "response_language": 309,
+      "location_relative": 253
+    },
+    "languages": {
+      "pure_english": 2083,
+      "singlish_light": 1654,
+      "singlish_heavy": 974,
+      "tanglish_light": 598,
+      "tanglish_heavy": 556
+    }
+  },
+  "test": {
+    "rows": 5866,
+    "label_0": 986,
+    "label_1": 4880,
+    "label_1_ratio": 0.832,
+    "scenarios": {
+      "simple_transactional": 1922,
+      "complex_task": 702,
+      "escalation": 659,
+      "continuation": 571,
+      "location_proximity": 543,
+      "sensitive_context": 469,
+      "named_location": 438,
+      "response_language": 310,
+      "location_relative": 252
+    },
+    "languages": {
+      "pure_english": 2071,
+      "singlish_light": 1622,
+      "singlish_heavy": 928,
+      "tanglish_light": 703,
+      "tanglish_heavy": 542
+    }
+  }
+}
