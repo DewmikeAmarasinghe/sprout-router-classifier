@@ -1,20 +1,20 @@
 """
 Generation distribution — three-level fraction hierarchy.
 
-All 9 scenarios defined for all 8 industries in all 5 languages.
-fraction=0.0 means 0 rows generated but the cell is visible and editable in the UI.
+DISTRIBUTION v3 — 30% label=0 (gpt-4o-mini), 70% label=1 (gpt-4o):
+  pure_english raised to 47% (was 43%).
+  singlish_light: 23%, singlish_heavy: 12%, tanglish_light: 11%, tanglish_heavy: 7%.
+  Within pure_english, simple_transactional and named_location raised further
+  to achieve label=0 ≈ 64% within that bucket.
 
-FRACTION RULES:
-  All scenario fractions within one IndustryBucket must sum to 1.0.
-  All industry fractions within one LanguageBucket must sum to 1.0.
-  All language fractions must sum to 1.0.
-  Pydantic validates all these at import time — misconfiguration = instant error.
+  Verified: 0.47 × 0.639 = 30.0% label=0 overall.
+  Language fractions: 0.47+0.23+0.12+0.11+0.07 = 1.00.
+  All scenario fractions within every industry verified to sum to 1.00.
 
-ADDING A NEW SCENARIO / INDUSTRY / LANGUAGE:
-  1. Add the key in config/keys.py
-  2. Add the config in the relevant config file
-  3. Add bucket entries here
-  → Appears automatically in the Gradio UI
+FRACTION RULES (all validated by Pydantic at import time):
+  Scenario fractions within each IndustryBucket must sum to 1.0.
+  Industry fractions within each LanguageBucket must sum to 1.0.
+  Language fractions must sum to 1.0.
 """
 
 from __future__ import annotations
@@ -88,7 +88,6 @@ class GenerationDistribution(BaseModel):
         return self
 
     def resolve(self) -> GenerationDistribution:
-        """Compute all computed_count values. Called once at import time."""
         for lang in self.languages:
             lang.computed_count = round(self.global_total * lang.fraction)
             for ind in lang.industries:
@@ -98,7 +97,6 @@ class GenerationDistribution(BaseModel):
         return self
 
     def to_cells(self) -> list[GenerationCell]:
-        """Active generation tasks only (computed_count > 0)."""
         return [
             GenerationCell(
                 language=lang.language,
@@ -113,9 +111,13 @@ class GenerationDistribution(BaseModel):
         ]
 
     def all_cells_including_zero(self) -> list[GenerationCell]:
-        """All cells including zero-count ones — for UI display."""
+        """All cells including zero-count ones for UI display.
+
+        Uses model_construct to bypass target_count ge=1 validation.
+        Zero-count cells are display-only — never submitted to run_cells().
+        """
         return [
-            GenerationCell(
+            GenerationCell.model_construct(
                 language=lang.language,
                 industry=ind.industry,
                 scenario=sc.scenario,
@@ -154,12 +156,23 @@ class GenerationDistribution(BaseModel):
     def get_language(self, key: LanguageKey) -> LanguageBucket | None:
         return next((lb for lb in self.languages if lb.language == key), None)
 
+    def planned_label_split(self) -> tuple[int, int]:
+        """Return (label_0_count, label_1_count) from distribution fractions.
 
-# ── Shorthand constructors ────────────────────────────────────────────────────
+        Used by planned EDA (phase_4_eda.py --planned).
+        """
+        from backend.config.keys import LABEL_0_SCENARIOS
+
+        label_0 = label_1 = 0
+        for cell in self.to_cells():
+            if cell.language == LanguageKey.PURE_ENGLISH and cell.scenario in LABEL_0_SCENARIOS:
+                label_0 += cell.target_count
+            else:
+                label_1 += cell.target_count
+        return label_0, label_1
 
 
 def sc(scenario: ScenarioKey, fraction: float) -> ScenarioBucket:
-    """Create a ScenarioBucket. IDE shows all valid ScenarioKey members."""
     return ScenarioBucket(scenario=scenario, fraction=fraction)
 
 
@@ -177,12 +190,7 @@ def industry(
     response_lang: float,
     continuation: float,
 ) -> IndustryBucket:
-    """Create an IndustryBucket with all 9 scenarios explicitly named.
-
-    All 9 keyword arguments required — prevents accidental omissions.
-    Set non-applicable ones to 0.0.
-    Raises ValidationError immediately if fractions don't sum to 1.0.
-    """
+    """Create an IndustryBucket. All 9 scenario keyword args required."""
     return IndustryBucket(
         industry=key,
         fraction=fraction,
@@ -207,127 +215,133 @@ LK = LanguageKey
 DISTRIBUTION: GenerationDistribution = GenerationDistribution(
     global_total=60_000,
     languages=[
-        # ── PURE ENGLISH (35% = ~21,000) ──────────────────────────────────────
-        # Largest single bucket. Pure English label=0 examples are the primary
-        # anchor class — the classifier must confidently distinguish clear English
-        # from Singlish/Tanglish. Banking, insurance, tourism, and urban educated
-        # users all skew English. Hospitality raised for tourist-facing clients.
+        # ── PURE ENGLISH (47% = ~28,200) ──────────────────────────────────────
+        # Raised to 47% to achieve 30% label=0 overall.
+        # label=0 within pure_english ≈ 63.9%  (simple + named_loc per industry).
+        # 0.47 × 0.639 = 30.0% label=0 overall.
+        # Banking/insurance retain higher complex/sensitive due to their query nature.
         LanguageBucket(
             language=LK.PURE_ENGLISH,
-            fraction=0.35,
+            fraction=0.47,
             industries=[
+                # ecommerce: simple=0.56 named=0.12 → label=0=0.68 | sum=1.00
                 industry(
                     IK.ECOMMERCE,
                     0.12,
-                    simple=0.45,
-                    named_loc=0.08,
-                    proximity=0.05,
-                    relative=0.03,
-                    complex_task=0.06,
-                    sensitive=0.05,
-                    escalation=0.12,
+                    simple=0.56,
+                    named_loc=0.12,
+                    proximity=0.04,
+                    relative=0.02,
+                    complex_task=0.04,
+                    sensitive=0.04,
+                    escalation=0.08,
                     response_lang=0.00,
-                    continuation=0.16,
+                    continuation=0.10,
                 ),
+                # healthcare: simple=0.52 named=0.13 → label=0=0.65 | sum=1.00
                 industry(
                     IK.HEALTHCARE,
                     0.12,
-                    simple=0.40,
-                    named_loc=0.10,
-                    proximity=0.08,
-                    relative=0.03,
-                    complex_task=0.12,
-                    sensitive=0.14,
-                    escalation=0.07,
-                    response_lang=0.00,
-                    continuation=0.06,
-                ),
-                industry(
-                    IK.BANKING,
-                    0.20,
-                    simple=0.28,
-                    named_loc=0.07,
-                    proximity=0.04,
+                    simple=0.52,
+                    named_loc=0.13,
+                    proximity=0.05,
                     relative=0.02,
-                    complex_task=0.22,
-                    sensitive=0.20,
-                    escalation=0.09,
-                    response_lang=0.00,
-                    continuation=0.08,
-                ),
-                industry(
-                    IK.INSURANCE,
-                    0.12,
-                    simple=0.30,
-                    named_loc=0.06,
-                    proximity=0.02,
-                    relative=0.01,
-                    complex_task=0.30,
-                    sensitive=0.10,
-                    escalation=0.10,
-                    response_lang=0.00,
-                    continuation=0.11,
-                ),
-                industry(
-                    IK.TELECOM,
-                    0.13,
-                    simple=0.35,
-                    named_loc=0.06,
-                    proximity=0.03,
-                    relative=0.01,
-                    complex_task=0.16,
-                    sensitive=0.03,
-                    escalation=0.17,
-                    response_lang=0.00,
-                    continuation=0.19,
-                ),
-                industry(
-                    IK.LOGISTICS,
-                    0.06,
-                    simple=0.40,
-                    named_loc=0.10,
-                    proximity=0.10,
-                    relative=0.05,
-                    complex_task=0.04,
-                    sensitive=0.03,
-                    escalation=0.10,
-                    response_lang=0.00,
-                    continuation=0.18,
-                ),
-                industry(
-                    IK.HOSPITALITY,
-                    0.15,
-                    simple=0.48,
-                    named_loc=0.14,
-                    proximity=0.10,
-                    relative=0.10,
-                    complex_task=0.05,
-                    sensitive=0.02,
-                    escalation=0.07,
-                    response_lang=0.00,
-                    continuation=0.04,
-                ),
-                industry(
-                    IK.EDUCATION,
-                    0.10,
-                    simple=0.50,
-                    named_loc=0.14,
-                    proximity=0.06,
-                    relative=0.03,
-                    complex_task=0.16,
-                    sensitive=0.01,
+                    complex_task=0.09,
+                    sensitive=0.09,
                     escalation=0.05,
                     response_lang=0.00,
                     continuation=0.05,
                 ),
+                # banking: simple=0.43 named=0.10 → label=0=0.53 | sum=1.00
+                industry(
+                    IK.BANKING,
+                    0.20,
+                    simple=0.43,
+                    named_loc=0.10,
+                    proximity=0.03,
+                    relative=0.01,
+                    complex_task=0.15,
+                    sensitive=0.14,
+                    escalation=0.08,
+                    response_lang=0.00,
+                    continuation=0.06,
+                ),
+                # insurance: simple=0.46 named=0.10 → label=0=0.56 | sum=1.00
+                industry(
+                    IK.INSURANCE,
+                    0.12,
+                    simple=0.46,
+                    named_loc=0.10,
+                    proximity=0.02,
+                    relative=0.01,
+                    complex_task=0.22,
+                    sensitive=0.07,
+                    escalation=0.07,
+                    response_lang=0.00,
+                    continuation=0.05,
+                ),
+                # telecom: simple=0.46 named=0.09 → label=0=0.55 | sum=1.00
+                industry(
+                    IK.TELECOM,
+                    0.13,
+                    simple=0.46,
+                    named_loc=0.09,
+                    proximity=0.03,
+                    relative=0.01,
+                    complex_task=0.12,
+                    sensitive=0.03,
+                    escalation=0.13,
+                    response_lang=0.00,
+                    continuation=0.13,
+                ),
+                # logistics: simple=0.54 named=0.13 → label=0=0.67 | sum=1.00
+                industry(
+                    IK.LOGISTICS,
+                    0.06,
+                    simple=0.54,
+                    named_loc=0.13,
+                    proximity=0.06,
+                    relative=0.03,
+                    complex_task=0.03,
+                    sensitive=0.02,
+                    escalation=0.07,
+                    response_lang=0.00,
+                    continuation=0.12,
+                ),
+                # hospitality: simple=0.60 named=0.17 → label=0=0.77 | sum=1.00
+                industry(
+                    IK.HOSPITALITY,
+                    0.15,
+                    simple=0.60,
+                    named_loc=0.17,
+                    proximity=0.06,
+                    relative=0.07,
+                    complex_task=0.03,
+                    sensitive=0.02,
+                    escalation=0.03,
+                    response_lang=0.00,
+                    continuation=0.02,
+                ),
+                # education: simple=0.62 named=0.17 → label=0=0.79 | sum=1.00
+                industry(
+                    IK.EDUCATION,
+                    0.10,
+                    simple=0.62,
+                    named_loc=0.17,
+                    proximity=0.04,
+                    relative=0.02,
+                    complex_task=0.09,
+                    sensitive=0.01,
+                    escalation=0.03,
+                    response_lang=0.00,
+                    continuation=0.02,
+                ),
             ],
         ),
-        # ── SINGLISH LIGHT (28% = ~16,800, all label=1) ───────────────────────
-        # Dominant informal register for SL consumer interactions (eCommerce,
-        # healthcare). Reduced slightly from 34% to let pure_english lead.
+        # ── SINGLISH LIGHT (23% = ~13,800, all label=1) ───────────────────────
         LanguageBucket(
             language=LK.SINGLISH_LIGHT,
-            fraction=0.28,
+            fraction=0.23,
             industries=[
                 industry(
                     IK.ECOMMERCE,
@@ -435,12 +449,10 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
             ],
         ),
-        # ── SINGLISH HEAVY (17% = ~10,200, all label=1) ───────────────────────
-        # Local mass-market: the most casual, code-mixed register.
-        # eCommerce dominates — everyday local shopping queries.
+        # ── SINGLISH HEAVY (12% = ~7,200, all label=1) ────────────────────────
         LanguageBucket(
             language=LK.SINGLISH_HEAVY,
-            fraction=0.17,
+            fraction=0.12,
             industries=[
                 industry(
                     IK.ECOMMERCE,
@@ -549,8 +561,6 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
             ],
         ),
         # ── TANGLISH LIGHT (11% = ~6,600, all label=1) ────────────────────────
-        # SL Tamil speakers ~18–28% of population, concentrated in north/east.
-        # Healthcare raised — Tamil communities are heavy healthcare chatbot users.
         LanguageBucket(
             language=LK.TANGLISH_LIGHT,
             fraction=0.11,
@@ -661,12 +671,10 @@ DISTRIBUTION: GenerationDistribution = GenerationDistribution(
                 ),
             ],
         ),
-        # ── TANGLISH HEAVY (9% = ~5,400, all label=1) ─────────────────────────
-        # Predominantly northern/eastern SL Tamil-speaking users.
-        # Healthcare raised — heavy use in Tamil-majority districts.
+        # ── TANGLISH HEAVY (7% = ~4,200, all label=1) ─────────────────────────
         LanguageBucket(
             language=LK.TANGLISH_HEAVY,
-            fraction=0.09,
+            fraction=0.07,
             industries=[
                 industry(
                     IK.ECOMMERCE,

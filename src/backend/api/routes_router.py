@@ -1,8 +1,8 @@
 """
 API routes for the router module.
 
-Exposes RouterPredictor via HTTP for integration testing and external tooling.
-In production, Sprout would call this endpoint before every LLM API call.
+Exposes RouterPredictor via HTTP for integration testing and Sprout backend calls.
+In production, Sprout calls POST /api/router/predict before every LLM API call.
 
 Routes:
     POST /api/router/predict          route one message
@@ -34,7 +34,12 @@ class PredictBatchRequest(BaseModel):
 
 
 def load_predictor(dataset: str, model_key: str | None):
-    """Load the best available predictor for a dataset."""
+    """Load the best available predictor for a dataset.
+
+    Path is constructed as a directory (experiment_id is the folder name,
+    model.pkl lives inside). RouterPredictor.from_pkl handles this via
+    the candidate-chain: path/model.pkl is tried first.
+    """
     from backend.evaluation.comparator import ModelComparator
     from backend.router.predictor import RouterPredictor
     from backend.shared.path_resolver import get_experiment_path
@@ -48,7 +53,7 @@ def load_predictor(dataset: str, model_key: str | None):
     experiment_id = model_key or best.experiment_id
 
     if best.approach == "classical":
-        path = get_experiment_path(dataset, "classical") / "models" / f"{experiment_id}.pkl"
+        path = get_experiment_path(dataset, "classical") / "models" / experiment_id
         predictor = RouterPredictor.from_pkl(path)
     else:
         path = get_experiment_path(dataset, "transformers") / "models" / experiment_id
@@ -59,20 +64,14 @@ def load_predictor(dataset: str, model_key: str | None):
 
 @router.post("/predict")
 def predict(req: PredictRequest) -> dict:
-    """Route one message through the three-layer decision pipeline."""
+    """Route one message through the ML model."""
     try:
-        from backend.router.predictor import RouterPredictor
-        from backend.router.pymodels import ThresholdConfig
         from backend.shared.settings_manager import settings_manager
 
         predictor = load_predictor(req.dataset, req.model_key)
-        threshold = req.threshold or settings_manager.get("CONFIDENCE_THRESHOLD")
-
-        configured = RouterPredictor(
-            model=predictor._model,  # type: ignore[attr-defined]
-            threshold_config=ThresholdConfig(threshold=threshold),
-        )
-        result = configured.predict(req.text)
+        threshold = req.threshold or float(settings_manager.get("CONFIDENCE_THRESHOLD"))
+        predictor.set_threshold(threshold)
+        result = predictor.predict(req.text)
         return result.model_dump()
 
     except ValueError as exc:
@@ -85,18 +84,12 @@ def predict(req: PredictRequest) -> dict:
 def predict_batch(req: PredictBatchRequest) -> list[dict]:
     """Route a list of messages."""
     try:
-        from backend.router.predictor import RouterPredictor
-        from backend.router.pymodels import ThresholdConfig
         from backend.shared.settings_manager import settings_manager
 
         predictor = load_predictor(req.dataset, req.model_key)
-        threshold = req.threshold or settings_manager.get("CONFIDENCE_THRESHOLD")
-
-        configured = RouterPredictor(
-            model=predictor._model,  # type: ignore[attr-defined]
-            threshold_config=ThresholdConfig(threshold=threshold),
-        )
-        return [configured.predict(t).model_dump() for t in req.texts]
+        threshold = req.threshold or float(settings_manager.get("CONFIDENCE_THRESHOLD"))
+        predictor.set_threshold(threshold)
+        return [predictor.predict(t).model_dump() for t in req.texts]
 
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -106,21 +99,19 @@ def predict_batch(req: PredictBatchRequest) -> list[dict]:
 
 @router.get("/config")
 def get_config() -> dict:
-    """Return current router configuration."""
     from backend.shared.settings_manager import settings_manager
 
     return {
         "confidence_threshold": settings_manager.get("CONFIDENCE_THRESHOLD"),
         "safe_default_label": settings_manager.get("SAFE_DEFAULT_LABEL"),
-        "routed_to_on_default": "gpt-4o"
-        if settings_manager.get("SAFE_DEFAULT_LABEL") == 1
-        else "gpt-4o-mini",
+        "routed_to_on_default": (
+            "gpt-4o" if settings_manager.get("SAFE_DEFAULT_LABEL") == 1 else "gpt-4o-mini"
+        ),
     }
 
 
 @router.get("/status")
 def get_status(dataset: str = "v1") -> dict:
-    """Check if a trained model is available for the given dataset."""
     try:
         from backend.evaluation.comparator import ModelComparator
 

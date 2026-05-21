@@ -15,14 +15,26 @@ from backend.shared.settings_manager import settings_manager
 
 
 def get_available_models(dataset: str) -> list[str]:
-    """Return trained model keys available for routing."""
     try:
         from backend.evaluation.comparator import ModelComparator
 
         rows = ModelComparator().compare(dataset)
         return [r.experiment_id for r in rows] if rows else []
-    except Exception:
+    except Exception:  # noqa: BLE001
         return []
+
+
+def infer_approach(dataset: str, experiment_id: str) -> str:
+    try:
+        from backend.evaluation.comparator import ModelComparator
+
+        rows = ModelComparator().compare(dataset)
+        for row in rows:
+            if row.experiment_id == experiment_id:
+                return row.approach
+    except Exception:  # noqa: BLE001
+        pass
+    return "classical"
 
 
 def predict_message(
@@ -39,47 +51,33 @@ def predict_message(
 
     try:
         from backend.router.predictor import RouterPredictor
-        from backend.router.pymodels import ThresholdConfig
         from backend.shared.path_resolver import get_experiment_path
 
         approach = infer_approach(dataset, model_key)
 
         if approach == "classical":
-            path = get_experiment_path(dataset, "classical") / "models" / f"{model_key}.pkl"
-            predictor = RouterPredictor.from_pkl(path)
+            path = get_experiment_path(dataset, "classical") / "models" / model_key
         else:
             path = get_experiment_path(dataset, "transformers") / "models" / model_key
-            predictor = RouterPredictor.from_hf_checkpoint(path)
 
-        result = RouterPredictor(
-            model=predictor._model,  # type: ignore[attr-defined]
-            threshold_config=ThresholdConfig(threshold=threshold),
-        ).predict(message)
+        predictor = (
+            RouterPredictor.from_pkl(path)
+            if approach == "classical"
+            else RouterPredictor.from_hf_checkpoint(path)
+        )
+        predictor.set_threshold(threshold)
+        result = predictor.predict(message)
 
         label_str = f"label={result.label}  ({'gpt-4o' if result.label == 1 else 'gpt-4o-mini'})"
         return label_str, result.routed_to, f"{result.confidence:.4f}", result.routing_reason
 
     except FileNotFoundError:
         return "—", "—", "—", f"Model '{model_key}' not found. Re-run training."
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return "—", "—", "—", f"Error: {exc}"
 
 
-def infer_approach(dataset: str, experiment_id: str) -> str:
-    try:
-        from backend.evaluation.comparator import ModelComparator
-
-        rows = ModelComparator().compare(dataset)
-        for row in rows:
-            if row.experiment_id == experiment_id:
-                return row.approach
-    except Exception:
-        pass
-    return "classical"
-
-
 def load_threshold_curve(dataset: str) -> str:
-    """Load saved threshold curve and format as text table."""
     import json
 
     from backend.shared.path_resolver import get_experiment_path
@@ -105,7 +103,7 @@ def load_threshold_curve(dataset: str) -> str:
                 f"{row['tp']:>5}  {row['fn']:>5}{marker}"
             )
         return "\n".join(lines)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return f"Error loading curve: {exc}"
 
 
@@ -116,23 +114,17 @@ def refresh_models(dataset: str) -> gr.Dropdown:
 
 
 def build() -> None:
-    """Build the Router tab. Thin Gradio wrapper over backend/router/."""
-
     dataset_default = settings_manager.get("DATASET_VERSION")
-    threshold_default = settings_manager.get("CONFIDENCE_THRESHOLD")
+    threshold_default = float(settings_manager.get("CONFIDENCE_THRESHOLD"))
 
     gr.Markdown(
         "**Live routing prediction.** Load a trained model and test any message.\n\n"
         "Requires trained models from **Phase 5** (classical) or **Phase 6** (transformers)."
     )
 
-    # ── Config row ───────────────────────────────────────────────────────────
     with gr.Row():
         dataset_box = gr.Textbox(
-            value=dataset_default,
-            label="Dataset version",
-            max_lines=1,
-            scale=1,
+            value=dataset_default, label="Dataset version", max_lines=1, scale=1
         )
         model_dd = gr.Dropdown(
             choices=get_available_models(dataset_default),
@@ -149,16 +141,15 @@ def build() -> None:
         )
         refresh_btn = gr.Button("↻ Refresh models", size="sm", scale=1)
 
-    # ── Prediction ───────────────────────────────────────────────────────────
     with gr.Accordion("🚦 Live Prediction", open=True):
         gr.Markdown(
-            "Type any customer message. The router applies the three-layer decision:\n"
-            "script_detector → ML model confidence → threshold check."
+            "Type any customer message. The router applies: "
+            "script_detector → ML confidence → threshold check."
         )
         message_box = gr.Textbox(
             label="Customer message",
             lines=3,
-            placeholder='e.g. "nearest branch to me?" or "still shows error"',
+            placeholder='e.g. "nearest branch to me?" or "kohomada mata dannawada?"',
         )
         predict_btn = gr.Button("🚦 Route this message", variant="primary")
 
@@ -174,17 +165,15 @@ def build() -> None:
             outputs=[label_out, routed_to_out, confidence_out, reason_out],
         )
 
-    # ── Threshold curve ───────────────────────────────────────────────────────
     with gr.Accordion("📈 Threshold Curve", open=True):
         gr.Markdown(
             "Run `python phases/phase_8_router.py --dataset v1` to generate the curve.\n"
-            "Shows how recall_1 and precision_1 change across thresholds."
+            "Shows how recall_1 and precision_1 change across decision thresholds."
         )
         curve_btn = gr.Button("Load threshold curve", variant="secondary")
         curve_out = gr.Textbox(label="Threshold sweep results", lines=20, interactive=False)
         curve_btn.click(fn=load_threshold_curve, inputs=[dataset_box], outputs=curve_out)
 
-    # ── Batch test ────────────────────────────────────────────────────────────
     with gr.Accordion("📋 Batch Test Messages", open=True):
         gr.Markdown("Paste multiple messages (one per line) to route in batch.")
         batch_input = gr.Textbox(label="Messages (one per line)", lines=8)

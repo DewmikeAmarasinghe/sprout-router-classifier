@@ -1,13 +1,12 @@
 """
 Generation tab panel.
 
-Three distinct preview sections plus full pipeline controls:
-  1. System Prompt Preview   — context sent to the model (open=True)
-  2. User Prompt Preview     — per-turn user messages (open=True)
-  3. Dry Run                 — generate and show messages (open=True)
-  4. Full Pipeline           — generate + split controls (open=True)
-
-All accordions default to open=True per project coding standards.
+Section order:
+  1. System Prompt Preview   (open=True)
+  2. User Prompt Preview     (open=True)
+  3. Dry Run                 (open=True)
+  4. Regenerate Examples     (open=True)  ← between dry run and pipeline
+  5. Full Pipeline           (open=True)
 """
 
 from __future__ import annotations
@@ -114,21 +113,12 @@ def preview_continuation_msg(language: str, industry: str, scenario: str) -> str
         if remaining <= 0:
             return "(Cell is small — only 1 batch needed, no continuation turns)"
 
-        return CONTINUE_USER_MSG.format(
-            turn=5,
-            generated=generated,
-            target=total,
-            n=n,
-        )
+        return CONTINUE_USER_MSG.format(turn=5, generated=generated, target=total, n=n)
     except Exception as exc:  # noqa: BLE001
         return f"Error: {exc}"
 
 
 def dry_run(language: str, industry: str, scenario: str, n: int) -> str:
-    """Generate N messages and return only the generated output with word counts.
-
-    Nothing is saved to disk.
-    """
     try:
         from backend.generation.generator import GeneratorService
         from backend.generation.pymodels import GenerationCell
@@ -155,6 +145,67 @@ def dry_run(language: str, industry: str, scenario: str, n: int) -> str:
         return "\n".join(lines)
     except Exception as exc:  # noqa: BLE001
         return f"Error: {exc}"
+
+
+def regenerate_examples(workers: int, force: bool) -> Generator[str, None, None]:
+    """Stream progress while regenerating examples for all active cells."""
+    updates: queue.SimpleQueue[str] = queue.SimpleQueue()
+
+    def thread_target() -> None:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        cells = [c for c in DISTRIBUTION.all_cells_including_zero() if c.target_count > 0]
+        to_gen = [
+            c
+            for c in cells
+            if force or not example_store.is_cached(c.language, c.industry, c.scenario)
+        ]
+        skipped = len(cells) - len(to_gen)
+
+        if not to_gen:
+            updates.put("__DONE__ All examples already cached. Enable Force to overwrite.")
+            return
+
+        updates.put(
+            f"Generating examples for {len(to_gen)} cells "
+            f"({skipped} already cached)  workers={int(workers)}"
+        )
+
+        def generate_one(cell) -> tuple[str, str]:
+            try:
+                example_store.get(
+                    cell.language, cell.industry, cell.scenario, force_regenerate=True
+                )
+                return cell.cell_id, "✓"
+            except Exception as exc:  # noqa: BLE001
+                return cell.cell_id, f"✗ {exc!s:.80}"
+
+        done = failed = 0
+        with ThreadPoolExecutor(max_workers=min(int(workers), 10)) as executor:
+            futures = {executor.submit(generate_one, c): c for c in to_gen}
+            for i, future in enumerate(as_completed(futures), 1):
+                cell_id, status = future.result()
+                if status == "✓":
+                    done += 1
+                else:
+                    failed += 1
+                updates.put(f"[{i:3}/{len(to_gen)}] {status}  {cell_id}")
+
+        updates.put(f"__DONE__ Done — generated: {done}  failed: {failed}  skipped: {skipped}")
+
+    threading.Thread(target=thread_target, daemon=True).start()
+
+    lines: list[str] = []
+    yield "Starting example regeneration..."
+
+    while True:
+        msg = updates.get()
+        if msg.startswith("__DONE__"):
+            lines.append(f"✅ {msg[8:]}")
+            yield "\n".join(lines[-50:])
+            break
+        lines.append(msg)
+        yield "\n".join(lines[-50:])
 
 
 def run_split() -> str:
@@ -265,8 +316,9 @@ def stream_full_pipeline(resume: bool, workers: int) -> Generator[str, None, Non
 
 
 def build() -> None:
-    """Build the Generation tab. All accordions open=True per coding standards."""
-
+    """Build the Generation tab. Section order:
+    System Prompt → User Prompt → Dry Run → Regenerate Examples → Full Pipeline.
+    """
     gr.Markdown("Select **(Language × Industry × Scenario)**. All sections update automatically.")
 
     with gr.Row():
@@ -287,12 +339,12 @@ def build() -> None:
         max_lines=1,
     )
 
+    # ── 1. System Prompt Preview ──────────────────────────────────────────────
     with gr.Accordion("🗂 System Prompt Preview", open=True):
         gr.Markdown(
-            "Context the model receives at the start of every session: language mandate, "
-            "industry info, scenario definition, length distribution, examples, and rules.\n\n"
-            "The 'Generate N messages' user message is NOT shown here — it's added per-turn by the generator.\n\n"
-            "Run `python cli.py examples-all --workers 10` to populate cell-specific examples."
+            "Context the model receives — language, industry, scenario, examples, rules.\n\n"
+            "The 'Generate N messages' user message is added per-turn by the generator.\n\n"
+            "Run **Regenerate Examples** below to populate cell-specific examples."
         )
         system_prompt_box = gr.Textbox(
             value=preview_system_prompt(
@@ -303,12 +355,29 @@ def build() -> None:
             interactive=False,
         )
 
+    # ── 2. Regenerate Examples ────────────────────────────────────────────────
+    with gr.Accordion("⚡ Regenerate Examples (examples.json)", open=True):
+        gr.Markdown(
+            "Generate cell-specific examples for all active cells and save to `examples.json`.\n\n"
+            "Examples are injected into system prompts to improve generation quality.\n\n"
+            "**Run before starting a full generation run.**\n"
+            "CLI equivalent: `python cli.py examples-all --workers 5`"
+        )
+        regen_workers = gr.Slider(
+            minimum=1, maximum=10, value=5, step=1, label="Workers (recommend 5 — uses API)"
+        )
+        regen_force = gr.Checkbox(label="Force regenerate (overwrite existing)", value=False)
+        regen_btn = gr.Button("⚡ Regenerate All Examples", variant="secondary")
+        regen_out = gr.Textbox(label="Progress (live)", lines=15, interactive=False)
+        regen_btn.click(
+            fn=regenerate_examples, inputs=[regen_workers, regen_force], outputs=regen_out
+        )
+
+    # ── 3. User Prompt Preview ────────────────────────────────────────────────
     with gr.Accordion("💬 User Prompt Preview (real per-turn requests)", open=True):
         gr.Markdown(
-            "What gets sent as the USER MESSAGE each turn. The system prompt stays fixed; "
-            "only user messages change per batch.\n\n"
-            "**Turn 1** sets session scope (total target + batch count).\n"
-            "**Turn 2+** shows progress so the model understands how much variety is still needed."
+            "What gets sent as the USER MESSAGE each turn.\n\n"
+            "**Turn 1** sets session scope. **Turn 2+** shows progress context."
         )
         with gr.Row():
             first_turn_box = gr.Textbox(
@@ -323,25 +392,22 @@ def build() -> None:
                 value=preview_continuation_msg(
                     language_choices()[0], industry_choices()[0], scenario_choices()[0]
                 ),
-                label="Turn 5 — Continuation batch user message (example)",
+                label="Turn 5 — Continuation batch (example)",
                 lines=14,
                 interactive=False,
             )
 
+    # ── 4. Dry Run ────────────────────────────────────────────────────────────
     with gr.Accordion("🧪 Dry Run — generate and preview messages", open=True):
-        gr.Markdown(
-            "Generate N messages for the selected cell. **Nothing is saved.**\n\n"
-            "Shows each generated message with its word count and routing label."
-        )
-        dry_n = gr.Slider(minimum=3, maximum=50, value=10, step=1, label="N messages to generate")
+        gr.Markdown("Generate N messages for the selected cell. **Nothing is saved.**")
+        dry_n = gr.Slider(minimum=3, maximum=50, value=10, step=1, label="N messages")
         dry_btn = gr.Button("🧪 Generate (no save)", variant="secondary")
         dry_out = gr.Textbox(
-            label="Generated messages  [word count per message]",
-            lines=20,
-            interactive=False,
+            label="Generated messages  [word count per message]", lines=20, interactive=False
         )
         dry_btn.click(fn=dry_run, inputs=[lang_dd, ind_dd, sc_dd, dry_n], outputs=dry_out)
 
+    # ── 5. Full Pipeline ──────────────────────────────────────────────────────
     with gr.Accordion("🚀 Full Pipeline", open=True):
         dataset = settings_manager.get("DATASET_VERSION")
         cp_every = settings_manager.get("CHECKPOINT_EVERY")
@@ -349,34 +415,23 @@ def build() -> None:
 
         gr.Markdown(
             f"**Dataset:** `{dataset}`  |  **Max workers:** {max_w}\n\n"
-            f"Checkpoint every **{cp_every:,}** rows. Live progress updates as cells complete.\n\n"
+            f"Checkpoint every **{cp_every:,}** rows.\n\n"
             "⚠️ Start server **without `--reload`** — file watcher interrupts generation.\n\n"
             "**Resume** = skip completed cells (use only after Ctrl+C).\n"
             "**Fill gaps** = CLI: `python phases/phase_2_generate.py --fill-gaps --workers 6`"
         )
 
         workers_slider = gr.Slider(
-            minimum=1,
-            maximum=10,
-            value=7,
-            step=1,
-            label="Workers (recommend 7 — 10 hits rate limits on large cells)",
+            minimum=1, maximum=10, value=7, step=1, label="Workers (recommend 7)"
         )
-        resume_cb = gr.Checkbox(
-            label="Resume from checkpoint (use only after an interrupted run)",
-            value=False,
-        )
+        resume_cb = gr.Checkbox(label="Resume from checkpoint (use only after Ctrl+C)", value=False)
 
         with gr.Row():
             gen_btn = gr.Button("▶ Generate only", variant="secondary")
             split_btn = gr.Button("✂ Split only", variant="secondary")
             full_btn = gr.Button("🚀 Generate + Split", variant="primary", scale=2)
 
-        pipeline_out = gr.Textbox(
-            label="Progress (live — updates as each cell completes)",
-            lines=20,
-            interactive=False,
-        )
+        pipeline_out = gr.Textbox(label="Progress (live)", lines=20, interactive=False)
 
         gen_btn.click(fn=stream_generate, inputs=[resume_cb, workers_slider], outputs=pipeline_out)
         split_btn.click(fn=run_split, outputs=pipeline_out)
@@ -384,6 +439,7 @@ def build() -> None:
             fn=stream_full_pipeline, inputs=[resume_cb, workers_slider], outputs=pipeline_out
         )
 
+    # Wire dropdowns → update all four display areas
     for dd in [lang_dd, ind_dd, sc_dd]:
         dd.change(
             fn=on_selection_change,
