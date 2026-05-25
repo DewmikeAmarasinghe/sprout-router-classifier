@@ -11,31 +11,11 @@ import gradio as gr
 
 from backend.evaluation.comparator import ModelComparator
 from backend.evaluation.cost_simulator import CostSimulator
+from backend.evaluation.pymodels import ComparisonRow, CostSimResult
 from backend.shared.settings_manager import settings_manager
+from backend.training.pymodels import EVALUATION_TABLE_HEADERS, MetricsResult
 
-COMPARISON_HEADERS = [
-    "Experiment",
-    "Approach",
-    "recall_1",
-    "precision_1",
-    "recall_0",
-    "MCC",
-    "ROC-AUC",
-    "F1-macro",
-    "p50 ms",
-    "p95 ms",
-    "Pass",
-]
-
-COST_HEADERS = [
-    "Strategy",
-    "% to mini",
-    "% to gpt-4o",
-    "daily cost $",
-    "daily savings $",
-    "monthly savings $",
-    "recall_1",
-]
+COST_HEADERS = list(CostSimResult.model_fields.keys())
 
 
 def load_comparison(dataset: str) -> tuple[list[list], str]:
@@ -69,32 +49,27 @@ def load_cost_sim(dataset: str, daily_messages: int) -> list[list]:
         return [[f"Error: {exc}"]]
 
 
-def format_comparison_row(r: object) -> list:
-    return [
-        getattr(r, "experiment_id", ""),
-        getattr(r, "approach", ""),
-        f"{getattr(r, 'recall_1', 0):.4f}",
-        f"{getattr(r, 'precision_1', 0):.4f}",
-        f"{getattr(r, 'recall_0', 0):.4f}",
-        f"{getattr(r, 'mcc', 0):.4f}",
-        f"{getattr(r, 'roc_auc', 0):.4f}",
-        f"{getattr(r, 'f1_macro', 0):.4f}",
-        f"{getattr(r, 'latency_p50_ms', 0):.1f}",
-        f"{getattr(r, 'latency_p95_ms', 0):.1f}",
-        "✅" if getattr(r, "passes_production_threshold", False) else "❌",
-    ]
+def format_comparison_row(r: ComparisonRow) -> list:
+    row: list = [r.experiment_id, r.approach]
+    for field in MetricsResult.field_names():
+        row.append(MetricsResult.format_cell(field, float(getattr(r, field))))
+    row.append("✅" if r.passes_production_threshold else "❌")
+    return row
 
 
-def format_cost_row(r: object) -> list:
-    return [
-        getattr(r, "strategy_name", ""),
-        f"{getattr(r, 'pct_routed_to_mini', 0):.1%}",
-        f"{getattr(r, 'pct_routed_to_4o', 0):.1%}",
-        f"${getattr(r, 'daily_cost_usd', 0):.4f}",
-        f"${getattr(r, 'daily_savings_usd', 0):.4f}",
-        f"${getattr(r, 'monthly_savings_usd', 0):.2f}",
-        f"{getattr(r, 'recall_1', 0):.4f}",
-    ]
+def format_cost_row(r: CostSimResult) -> list:
+    row: list = []
+    for field in CostSimResult.model_fields:
+        value = getattr(r, field)
+        if field.startswith("pct_"):
+            row.append(f"{value:.1%}")
+        elif field.endswith("_usd"):
+            row.append(f"${value:.4f}" if "monthly" not in field else f"${value:.2f}")
+        elif field == "recall_1":
+            row.append(f"{value:.4f}")
+        else:
+            row.append(str(value))
+    return row
 
 
 def build() -> None:
@@ -103,7 +78,7 @@ def build() -> None:
     gr.Markdown(
         "**Evaluate** trained models. Run **Phase 5** (classical) and/or **Phase 6** "
         "(transformers on Kaggle) before loading results here.\n\n"
-        "Production threshold: **recall_1 ≥ 0.97** — "
+        f"Production threshold: **recall_1 ≥ {float(settings_manager.get('PRODUCTION_RECALL_THRESHOLD'))}** — "
         "at most 3% of complex/sensitive messages incorrectly routed to gpt-4o-mini."
     )
 
@@ -114,19 +89,21 @@ def build() -> None:
         daily_msgs = gr.Slider(
             minimum=1_000,
             maximum=100_000,
-            value=10_000,
+            value=int(settings_manager.get("DAILY_MESSAGES_ESTIMATE")),
             step=1_000,
             label="Daily message volume (for cost sim)",
             scale=3,
         )
 
     with gr.Accordion("📊 Model Comparison", open=True):
-        gr.Markdown("Ranks all trained experiments by recall_1. **Pass ✅** = recall_1 ≥ 0.97.")
+        gr.Markdown(
+            f"Ranks all trained experiments by recall_1. **Pass ✅** = recall_1 ≥ {float(settings_manager.get('PRODUCTION_RECALL_THRESHOLD'))}."
+        )
         compare_btn = gr.Button("▶ Load Comparison", variant="primary")
         best_summary = gr.Textbox(label="Best model", interactive=False, max_lines=2)
         compare_table = gr.Dataframe(
-            headers=COMPARISON_HEADERS,
-            datatype=["str"] * len(COMPARISON_HEADERS),
+            headers=EVALUATION_TABLE_HEADERS,
+            datatype=["str"] * len(EVALUATION_TABLE_HEADERS),
             interactive=False,
         )
         compare_btn.click(
@@ -136,7 +113,10 @@ def build() -> None:
         )
 
     with gr.Accordion("💰 Cost Simulation", open=True):
-        gr.Markdown("Daily API cost vs routing strategy. Pricing from `config/settings.py`.")
+        gr.Markdown(
+            "Daily API cost vs routing strategy. **all_gpt4o** is the baseline ($0 savings). "
+            "**all_mini** is shown as an unsafe reference only. Router rows are sorted by savings."
+        )
         cost_btn = gr.Button("▶ Run Cost Simulation", variant="secondary")
         cost_table = gr.Dataframe(
             headers=COST_HEADERS,

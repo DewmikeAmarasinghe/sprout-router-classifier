@@ -77,7 +77,7 @@ def run_all_classical(dataset: str = "v1") -> list[dict]:
     try:
         from backend.training.classical.trainer import ClassicalMLTrainer
 
-        results = ClassicalMLTrainer().train_all_combos(dataset)
+        results = ClassicalMLTrainer().train_combos(dataset)
         return [r.to_comparison_row() for r in results]
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -149,7 +149,7 @@ CLASSIFIER_REGISTRY: dict[str, ClassifierSpec] = {
     "xgboost": ClassifierSpec(
         key="xgboost",
         display_name="XGBoost",
-        description="Gradient boosting. Requires dense features — used with W2V/spaCy.",
+        description="Gradient boosting. Dense features only — pair with word2vec or spacy.",
         needs_calibration=False,
         default_params={
             "n_estimators": 300,
@@ -177,7 +177,11 @@ CLASSIFIER_REGISTRY: dict[str, ClassifierSpec] = {
 }
 
 # Ordered by expected performance / training speed.
-# Run --all to execute all; run specific combo with --vec X --clf Y.
+# Run --all to execute all; run specific combo with --vectorizer X --classifier Y.
+#
+# XGBoost is intentionally paired with dense vectorizers only (word2vec, spacy).
+# Sparse TF-IDF + XGBoost can produce inverted predictions (mcc < 0) especially
+# on GPU and is unreliable in practice.
 ACTIVE_COMBOS: list[tuple[str, str]] = [
     # TF-IDF + fast classifiers (run first, ~2 min each)
     ("tfidf_combined", "logistic_regression"),
@@ -185,16 +189,17 @@ ACTIVE_COMBOS: list[tuple[str, str]] = [
     ("tfidf_char", "logistic_regression"),
     ("tfidf_char", "lightgbm"),
     ("tfidf_word", "logistic_regression"),
-    # SVM (needs calibration, slightly slower)
+    # SVM (needs calibration, slightly slower but best recall on TF-IDF)
     ("tfidf_combined", "svm"),
     ("tfidf_char", "svm"),
-    # XGBoost + CatBoost on combined
-    ("tfidf_combined", "xgboost"),
+    # CatBoost on TF-IDF combined
     ("tfidf_combined", "catboost"),
     # Dense vector approaches (W2V trains on corpus, ~5 min)
     ("word2vec", "logistic_regression"),
     ("word2vec", "lightgbm"),
-    # spaCy (requires en_core_web_md: python -m spacy download en_core_web_md)
+    ("word2vec", "xgboost"),
+    # spaCy (requires en_core_web_md — auto-downloaded on first run)
     ("spacy", "logistic_regression"),
     ("spacy", "lightgbm"),
+    ("spacy", "xgboost"),
 ]

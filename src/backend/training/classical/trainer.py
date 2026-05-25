@@ -28,6 +28,7 @@ import pandas as pd
 
 from backend.shared.metrics import compute_all_metrics, time_inference
 from backend.shared.path_resolver import get_dataset_path, get_experiment_path
+from backend.shared.settings_manager import settings_manager
 from backend.training.classical.classifiers import build_classifier
 from backend.training.classical.config import (
     ACTIVE_COMBOS,
@@ -111,7 +112,9 @@ class ClassicalMLTrainer:
 
         log.info(f"  Results: {metrics.summary_line()}")
         if not metrics.passes_production_threshold:
-            log.warning(f"  ⚠️  recall_1 = {metrics.recall_1:.4f} < 0.97 — not production-safe")
+            log.warning(
+                f"  ⚠️  recall_1 = {metrics.recall_1:.4f} < {float(settings_manager.get('PRODUCTION_RECALL_THRESHOLD'))} — not production-safe"
+            )
 
         model_path = models_dir / "model.pkl"
         with model_path.open("wb") as f:
@@ -141,23 +144,29 @@ class ClassicalMLTrainer:
         save_result_json(result, models_dir)
         return result
 
-    def train_all_combos(
+    def train_combos(
         self,
         dataset_name: str,
+        combos: list[tuple[str, str]] | None = None,
         skip_on_failure: bool = True,
     ) -> list[ExperimentResult]:
-        """Run all experiments defined in ACTIVE_COMBOS.
+        """Run a list of (vectorizer, classifier) experiments.
 
         Args:
             dataset_name: Dataset version to train on.
+            combos: List of (vectorizer_key, classifier_key) pairs to run.
+                    Defaults to ACTIVE_COMBOS when None.
             skip_on_failure: If True, log error and continue on any failure.
 
         Returns:
             List of ExperimentResult for all completed experiments.
         """
+        if combos is None:
+            combos = ACTIVE_COMBOS
+
         results: list[ExperimentResult] = []
 
-        for vec_key, clf_key in ACTIVE_COMBOS:
+        for vec_key, clf_key in combos:
             try:
                 result = self.train_experiment(dataset_name, vec_key, clf_key)
                 results.append(result)
@@ -249,7 +258,15 @@ def print_summary(results: list[ExperimentResult]) -> None:
             f"{flag:>5}"
         )
     print("═" * 75)
-    best = max(results, key=lambda x: (x.metrics.passes_production_threshold, x.metrics.mcc))
-    print(f"\n  Best: {best.experiment_id}  MCC={best.metrics.mcc:.4f}")
+    passing = [r for r in results if r.metrics.passes_production_threshold]
+    if passing:
+        best = max(passing, key=lambda r: r.metrics.mcc)
+        print(
+            f"\n  Best (production): {best.experiment_id}  "
+            f"recall_1={best.metrics.recall_1:.4f}  MCC={best.metrics.mcc:.4f}"
+        )
+    else:
+        best = max(results, key=lambda r: r.metrics.recall_1)
+        print(f"\n  ⚠ No model passed recall threshold. Top by recall: {best.experiment_id}")
     print(f"  Model path: {best.model_path}")
     print("═" * 75 + "\n")

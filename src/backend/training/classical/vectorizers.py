@@ -151,15 +151,18 @@ class SpacyVectorizer:
         self.nlp_: Any = None
 
     def fit(self, X: list[str], y: Any = None) -> SpacyVectorizer:
-        try:
-            import spacy
+        import subprocess
+        import sys
 
-            log.info(f"Loading spaCy model: {self.model}")
+        import spacy
+
+        log.info(f"Loading spaCy model: {self.model}")
+        try:
             self.nlp_ = spacy.load(self.model, disable=["ner", "parser"])
-        except OSError as exc:
-            raise RuntimeError(
-                f"spaCy model '{self.model}' not found. Run: python -m spacy download {self.model}"
-            ) from exc
+        except OSError:
+            log.info(f"  '{self.model}' not found — downloading...")
+            subprocess.run([sys.executable, "-m", "spacy", "download", self.model], check=True)
+            self.nlp_ = spacy.load(self.model, disable=["ner", "parser"])
         return self
 
     def transform(self, X: list[str]) -> np.ndarray:

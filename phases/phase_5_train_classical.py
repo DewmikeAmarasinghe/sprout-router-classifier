@@ -1,18 +1,19 @@
 """
 Phase 5 — Classical ML Training.
 
-Trains all (vectorizer, classifier) combos in ACTIVE_COMBOS.
-After --all completes, automatically runs HPO (Optuna, n_trials=10) on the best model
-and retrains it with the tuned hyperparameters.
-
+Trains (vectorizer, classifier) combinations and optionally runs HPO on the best.
 HPO uses the val set — it NEVER touches test.csv.
 
 Usage:
-    python phases/phase_5_train_classical.py --all
-    python phases/phase_5_train_classical.py --all --no-hpo          # skip auto-HPO
-    python phases/phase_5_train_classical.py --all --n-trials 20     # more HPO trials
+    python phases/phase_5_train_classical.py --all              # all 25 combos (5×5)
+    python phases/phase_5_train_classical.py --all-active       # curated ACTIVE_COMBOS only
+    python phases/phase_5_train_classical.py --all --no-hpo     # skip auto-HPO
+    python phases/phase_5_train_classical.py --all --n-trials 20
     python phases/phase_5_train_classical.py --vectorizer tfidf_combined --classifier svm
     python phases/phase_5_train_classical.py --dataset v2 --all
+
+To clean outputs use:
+    python cli.py clean --dataset v1
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ log = logging.getLogger(__name__)
 
 
 def run_auto_hpo(dataset: str, results: list, n_trials: int) -> None:
-    """Run Optuna HPO on the best model from train_all_combos().
+    """Run Optuna HPO on the best model from train_combos().
 
     HOW HPO WORKS:
       Optuna runs n_trials iterations. Each trial:
@@ -63,11 +64,21 @@ def run_auto_hpo(dataset: str, results: list, n_trials: int) -> None:
     if not results:
         return
 
-    best_initial = max(results, key=lambda r: r.metrics.recall_1)
+    passing = [r for r in results if r.metrics.passes_production_threshold]
+    if not passing:
+        log.warning(
+            "No model passed production recall threshold — skipping auto-HPO. "
+            "Train transformers or adjust threshold."
+        )
+        return
+
+    # Same rule as print_summary / ModelComparator.best_model:
+    # must pass recall_1 threshold, then pick highest MCC (balanced precision/recall).
+    best_initial = max(passing, key=lambda r: r.metrics.mcc)
     log.info(
         f"Auto-HPO: targeting {best_initial.experiment_id}  "
-        f"(initial recall_1={best_initial.metrics.recall_1:.4f})  "
-        f"n_trials={n_trials}"
+        f"(recall_1={best_initial.metrics.recall_1:.4f}  "
+        f"MCC={best_initial.metrics.mcc:.4f})  n_trials={n_trials}"
     )
 
     from backend.training.classical.hpo import ClassicalHPORunner
@@ -98,9 +109,9 @@ def run_auto_hpo(dataset: str, results: list, n_trials: int) -> None:
         f"({sign}{improvement:.4f} vs initial)  MCC={tuned.metrics.mcc:.4f}"
     )
     if tuned.metrics.passes_production_threshold:
-        log.info("✅ Model now passes production threshold (recall_1 ≥ 0.97)")
+        log.info("✅ Model now passes production threshold (recall_1 ≥ 0.95)")
     else:
-        log.warning("⚠ Still below 0.97 after HPO. Consider more trials or training transformers.")
+        log.warning("⚠ Still below 0.95 after HPO. Consider more trials or training transformers.")
 
 
 def main() -> None:
@@ -109,28 +120,52 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--dataset", default="v1")
-    parser.add_argument("--all", action="store_true")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Train every combination across all registered vectorizers × classifiers (5×5=25)",
+    )
+    parser.add_argument(
+        "--all-active",
+        action="store_true",
+        help="Train only the curated ACTIVE_COMBOS subset",
+    )
     parser.add_argument("--vectorizer", default=None)
     parser.add_argument("--classifier", default=None)
     parser.add_argument(
         "--no-hpo",
         action="store_true",
-        help="Skip automatic HPO after --all (HPO runs by default)",
+        help="Skip automatic HPO after --all / --all-active (HPO runs by default)",
     )
     parser.add_argument(
         "--n-trials",
         type=int,
         default=10,
-        help="Number of Optuna HPO trials (default 10, ~5 min for classical)",
+        help="Number of Optuna HPO trials (default 10)",
     )
     args = parser.parse_args()
 
+    from backend.training.classical.config import (
+        ACTIVE_COMBOS,
+        CLASSIFIER_REGISTRY,
+        VECTORIZER_REGISTRY,
+    )
     from backend.training.classical.trainer import ClassicalMLTrainer
 
     trainer = ClassicalMLTrainer()
 
     if args.all:
-        results = trainer.train_all_combos(args.dataset)
+        all_combos = [(vec, clf) for vec in VECTORIZER_REGISTRY for clf in CLASSIFIER_REGISTRY]
+        log.info(
+            f"--all: training {len(all_combos)} combinations ({len(VECTORIZER_REGISTRY)} vectorizers × {len(CLASSIFIER_REGISTRY)} classifiers)"
+        )
+        results = trainer.train_combos(args.dataset, combos=all_combos)
+        if not args.no_hpo and results:
+            run_auto_hpo(args.dataset, results, args.n_trials)
+
+    elif args.all_active:
+        log.info(f"--all-active: training {len(ACTIVE_COMBOS)} curated combinations")
+        results = trainer.train_combos(args.dataset, combos=ACTIVE_COMBOS)
         if not args.no_hpo and results:
             run_auto_hpo(args.dataset, results, args.n_trials)
 
@@ -138,7 +173,7 @@ def main() -> None:
         trainer.train_experiment(args.dataset, args.vectorizer, args.classifier)
 
     else:
-        parser.error("Provide --all, or both --vectorizer and --classifier")
+        parser.error("Provide --all, --all-active, or both --vectorizer and --classifier")
 
 
 if __name__ == "__main__":

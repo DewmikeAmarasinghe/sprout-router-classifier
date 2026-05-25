@@ -23,27 +23,8 @@ from backend.training.pymodels import ExperimentResult, MetricsResult
 
 log = logging.getLogger(__name__)
 
-PRODUCTION_RECALL_THRESHOLD = 0.97
-
 # All metric field names that may appear at the top level of a flat result.json
-METRIC_FIELD_NAMES = {
-    "recall_1",
-    "precision_1",
-    "recall_0",
-    "precision_0",
-    "mcc",
-    "roc_auc",
-    "pr_auc",
-    "f1_macro",
-    "f1_weighted",
-    "log_loss",
-    "ece",
-    "accuracy",
-    "latency_mean_ms",
-    "latency_p50_ms",
-    "latency_p95_ms",
-    "latency_p99_ms",
-}
+METRIC_FIELD_NAMES = set(MetricsResult.field_names())
 
 
 class ModelComparator:
@@ -67,7 +48,7 @@ class ModelComparator:
         return rows
 
     def best_model(self, dataset_name: str) -> ComparisonRow | None:
-        """Return the best model meeting the production threshold (recall_1 >= 0.97).
+        """Return the best model meeting the production threshold (recall_1 >= PRODUCTION_RECALL_THRESHOLD).
 
         Selection priority: passes threshold → highest MCC → fastest latency.
         Returns None if no results found.
@@ -135,24 +116,11 @@ def parse_result_json(data: dict, dataset_name: str) -> ExperimentResult | None:
         return ExperimentResult.model_validate(data)
 
     # Flat format — reconstruct nested MetricsResult from top-level fields
-    metrics = MetricsResult(
-        recall_1=float(data.get("recall_1", 0.0)),
-        precision_1=float(data.get("precision_1", 0.0)),
-        recall_0=float(data.get("recall_0", 0.0)),
-        precision_0=float(data.get("precision_0", 0.0)),
-        mcc=float(data.get("mcc", 0.0)),
-        roc_auc=float(data.get("roc_auc", 0.0)),
-        pr_auc=float(data.get("pr_auc", 0.0)),
-        f1_macro=float(data.get("f1_macro", 0.0)),
-        f1_weighted=float(data.get("f1_weighted", 0.0)),
-        log_loss=float(data.get("log_loss", 0.0)),
-        ece=float(data.get("ece", 0.0)),
-        accuracy=float(data.get("accuracy", 0.0)),
-        latency_mean_ms=float(data.get("latency_mean_ms", 0.0)),
-        latency_p50_ms=float(data.get("latency_p50_ms", 0.0)),
-        latency_p95_ms=float(data.get("latency_p95_ms", 0.0)),
-        latency_p99_ms=float(data.get("latency_p99_ms", 0.0)),
-    )
+    metrics_data = MetricsResult().model_dump()
+    for name in MetricsResult.field_names():
+        if name in data:
+            metrics_data[name] = data[name]
+    metrics = MetricsResult.model_validate(metrics_data)
 
     # Infer experiment_id from vectorizer+classifier keys if not stored directly
     experiment_id = data.get("experiment_id") or (
@@ -173,24 +141,12 @@ def parse_result_json(data: dict, dataset_name: str) -> ExperimentResult | None:
 
 def to_comparison_row(result: ExperimentResult) -> ComparisonRow:
     """Convert ExperimentResult to a ComparisonRow for display."""
-    m = result.metrics
-    return ComparisonRow(
+    return ComparisonRow.from_experiment(
         experiment_id=result.experiment_id,
         approach=result.approach,
-        model_name=result.model_name,
+        model_name=result.model_name or result.experiment_id,
         dataset_name=result.dataset_name,
-        recall_1=m.recall_1,
-        precision_1=m.precision_1,
-        recall_0=m.recall_0,
-        precision_0=m.precision_0,
-        mcc=m.mcc,
-        roc_auc=m.roc_auc,
-        f1_macro=m.f1_macro,
-        log_loss=m.log_loss,
-        accuracy=m.accuracy,
-        latency_p50_ms=m.latency_p50_ms,
-        latency_p95_ms=m.latency_p95_ms,
-        passes_production_threshold=m.passes_production_threshold,
+        metrics=result.metrics,
         mlflow_run_id=result.mlflow_run_id,
         notes=result.notes,
     )

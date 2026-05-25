@@ -1,8 +1,14 @@
 """
-ExampleStore — cached per-cell examples.
+ExampleStore — cached per-cell examples injected into system prompts.
 
 Thread-safe for parallel examples-all generation.
 Handles missing or empty examples.json gracefully.
+
+EXAMPLE QUALITY REQUIREMENTS (enforced in _generate_via_api):
+  - Plain message text only — no "label=X", "Seed N:", or any prefix
+  - Real Sri Lankan locations only
+  - Varied formats, realistic messages a customer would actually send
+  - For CONTINUATION: mid-conversation follow-ups, NOT bot/AI complaints
 """
 
 from __future__ import annotations
@@ -38,7 +44,7 @@ class ExampleStore:
 
     def __init__(self) -> None:
         self._cache: dict[str, list[str]] = {}
-        self._lock = threading.Lock()  # protects _cache + file writes
+        self._lock = threading.Lock()
         self._load()
 
     def get(
@@ -114,23 +120,58 @@ class ExampleStore:
         industry: IndustryKey,
         scenario: ScenarioKey,
     ) -> list[str]:
+        """Generate example messages for a cell via the LLM.
+
+        The prompt enforces the same output quality rules as the main generation:
+        no label prefixes, no seed numbers, real Sri Lankan locations, realistic messages.
+        """
         from openai import OpenAI
 
         lang_cfg = LANGUAGE_CONFIGS[language]
         ind_cfg = INDUSTRY_CONFIGS[industry]
         sc_cfg = SCENARIO_CONFIGS[scenario]
 
+        # Build scenario-specific guidance
+        continuation_note = ""
+        if scenario == ScenarioKey.CONTINUATION:
+            continuation_note = (
+                "\n  IMPORTANT: Sub-type A = PREVIOUS SERVICE ACTION failed (payment, order, upgrade, "
+                "booking), NOT the chatbot/AI/bot itself."
+                '\n  ❌ "The bot failed" ❌ "Your chat froze" ✅ "Payment keeps failing when I try"\n'
+            )
+
+        location_note = ""
+        if scenario in (
+            ScenarioKey.NAMED_LOCATION,
+            ScenarioKey.LOCATION_PROXIMITY,
+            ScenarioKey.LOCATION_RELATIVE,
+        ):
+            location_note = (
+                "\n  Use ONLY real Sri Lankan places: Colombo, Kandy, Galle, Negombo, Matara, "
+                "Jaffna, Kurunegala, Nuwara Eliya, Fort, Pettah, Kollupitiya, Bambalapitiya, "
+                "Nugegoda, Maharagama, Majestic City, Liberty Plaza, One Galle Face, Odel.\n"
+                "  ❌ Never invent: 'City Park', 'Cross Street', 'River Bridge'\n"
+            )
+
         prompt = (
             f"Generate {EXAMPLES_PER_CELL} realistic customer service messages for:\n"
-            f"  Language: {lang_cfg.display_name} — {lang_cfg.instruction}\n"
-            f"  Industry: {ind_cfg.display_name} — {ind_cfg.description}\n"
-            f"  Domain terms: {', '.join(ind_cfg.product_examples[:6])}\n"
-            f"  Scenario: {sc_cfg.display_name} — {sc_cfg.description}\n\n"
-            f"Requirements:\n"
-            f"  - Each message clearly represents this scenario\n"
-            f"  - Written in the specified language format\n"
-            f"  - Vary lengths: {sc_cfg.length_dist.to_prompt_str()}\n"
-            f"  - Realistic for {ind_cfg.typical_platform}\n\n"
+            f"  Language:  {lang_cfg.display_name} — {lang_cfg.instruction}\n"
+            f"  Industry:  {ind_cfg.display_name} — {ind_cfg.description}\n"
+            f"  Domain:    {', '.join(ind_cfg.product_examples[:6])}\n"
+            f"  Scenario:  {sc_cfg.display_name} — {sc_cfg.description}\n"
+            f"  Lengths:   {sc_cfg.length_dist.to_prompt_str()}\n"
+            f"  Platform:  {ind_cfg.typical_platform}\n"
+            f"{continuation_note}"
+            f"{location_note}\n"
+            "ABSOLUTE OUTPUT RULES:\n"
+            "  1. Output the raw message text ONLY. Never prefix or annotate.\n"
+            '     ❌ "label=1 Nearest campus?" ❌ "Seed 3: 1-6 words:" ❌ "Escalation 14: ..."\n'
+            '     ✅ "Nearest campus for tuition info?"\n'
+            "  2. Never start with: 'Enna,' / 'Enna ' / 'Generate' / 'Create' / 'Ask about'\n"
+            '     ❌ "Enna, what is the process..." ✅ "What is the process to..."\n'
+            "  3. Each message must be something a real Sri Lankan customer would actually type.\n"
+            "  4. Vary lengths: mix short (1-8 words), medium (9-25 words), some long (26+ words).\n"
+            "  5. Each message must be unique and cover a different aspect of the scenario.\n\n"
             f'Return ONLY valid JSON: {{"examples": ["msg1", ..., "msg{EXAMPLES_PER_CELL}"]}}'
         )
 
@@ -146,7 +187,19 @@ class ExampleStore:
             return []
 
         data: dict = json.loads(content)
-        return data.get("examples", [])[:EXAMPLES_PER_CELL]
+        raw_examples: list[str] = data.get("examples", [])
+
+        # Post-process: strip any accidental label/seed prefixes
+        cleaned: list[str] = []
+        for ex in raw_examples[:EXAMPLES_PER_CELL]:
+            text = str(ex).strip()
+            # Remove common prefixes the model might add despite instructions
+            for prefix in ("label=0 ", "label=1 ", "label=0: ", "label=1: "):
+                if text.lower().startswith(prefix):
+                    text = text[len(prefix) :].strip()
+            cleaned.append(text)
+
+        return [t for t in cleaned if t][:EXAMPLES_PER_CELL]
 
     def _load(self) -> None:
         """Load cache. Handles missing, empty, or malformed files gracefully."""

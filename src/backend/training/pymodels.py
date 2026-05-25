@@ -3,6 +3,12 @@ Pydantic models shared by classical and transformer training modules.
 
 ExperimentResult is the standard output from any training run.
 All trainers return this model so the comparator can work uniformly.
+
+DESIGN NOTE — settings_manager in model methods:
+    passes_production_threshold and summary_line read PRODUCTION_RECALL_THRESHOLD
+    from settings_manager at call-time, not at import-time. This means changing
+    settings.py (or editing it via the Gradio settings panel) takes effect
+    immediately without restarting the process.
 """
 
 from __future__ import annotations
@@ -19,7 +25,7 @@ class MetricsResult(BaseModel):
     precision_0: float = 0.0
     precision_1: float = 0.0
     recall_0: float = 0.0
-    recall_1: float = 0.0  # MUST be >= 0.97 in production
+    recall_1: float = 0.0
     f1_macro: float = 0.0
     f1_weighted: float = 0.0
     mcc: float = 0.0  # Matthews Correlation Coefficient
@@ -33,13 +39,39 @@ class MetricsResult(BaseModel):
     latency_p95_ms: float = 0.0
     latency_p99_ms: float = 0.0
 
+    @classmethod
+    def field_names(cls) -> list[str]:
+        """All metric field names, in model definition order."""
+        return list(cls.model_fields.keys())
+
+    @staticmethod
+    def format_cell(field: str, value: float) -> str:
+        """Format one metric value for display in Gradio tables."""
+        if field.startswith("latency_"):
+            return f"{value:.1f}ms"
+        return f"{value:.4f}"
+
     @property
     def passes_production_threshold(self) -> bool:
-        """True if this model is safe to deploy (recall_1 >= 0.97)."""
-        return self.recall_1 >= 0.97
+        """True if this model is safe to deploy.
+
+        Reads PRODUCTION_RECALL_THRESHOLD from settings_manager at call-time
+        so that changing settings.py is reflected immediately without restart.
+        """
+        from backend.shared.settings_manager import settings_manager
+
+        threshold = float(settings_manager.get("PRODUCTION_RECALL_THRESHOLD"))
+        return self.recall_1 >= threshold
 
     def summary_line(self) -> str:
-        flag = "" if self.passes_production_threshold else " ⚠️ recall_1 < 0.97"
+        """One-line human-readable summary showing whether this model passes.
+
+        Uses the live settings threshold so the ⚠ flag updates with settings changes.
+        """
+        from backend.shared.settings_manager import settings_manager
+
+        threshold = float(settings_manager.get("PRODUCTION_RECALL_THRESHOLD"))
+        flag = "" if self.recall_1 >= threshold else f" ⚠️ recall_1 < {threshold}"
         return (
             f"recall_1={self.recall_1:.4f}  "
             f"precision_1={self.precision_1:.4f}  "
@@ -47,6 +79,16 @@ class MetricsResult(BaseModel):
             f"roc_auc={self.roc_auc:.4f}  "
             f"p95={self.latency_p95_ms:.1f}ms{flag}"
         )
+
+
+# Table headers derived from MetricsResult — add a field to the model and it appears in UI.
+CLASSICAL_TABLE_HEADERS: list[str] = (
+    ["Vectorizer", "Classifier"] + MetricsResult.field_names() + ["Pass"]
+)
+TRANSFORMER_TABLE_HEADERS: list[str] = ["Model"] + MetricsResult.field_names() + ["Pass"]
+EVALUATION_TABLE_HEADERS: list[str] = (
+    ["Experiment", "Approach"] + MetricsResult.field_names() + ["Pass"]
+)
 
 
 class ExperimentResult(BaseModel):
@@ -65,7 +107,7 @@ class ExperimentResult(BaseModel):
     notes: str = ""
 
     def to_comparison_row(self) -> dict:
-        """Flatten to one row for master_comparison.csv."""
+        """Flatten to one row for master_comparison.csv and result.json."""
         return {
             "experiment_id": self.experiment_id,
             "approach": self.approach,
@@ -73,18 +115,7 @@ class ExperimentResult(BaseModel):
             "classifier_key": self.classifier_key,
             "model_name": self.model_name,
             "dataset_name": self.dataset_name,
-            "recall_1": self.metrics.recall_1,
-            "precision_1": self.metrics.precision_1,
-            "recall_0": self.metrics.recall_0,
-            "precision_0": self.metrics.precision_0,
-            "mcc": self.metrics.mcc,
-            "roc_auc": self.metrics.roc_auc,
-            "pr_auc": self.metrics.pr_auc,
-            "f1_macro": self.metrics.f1_macro,
-            "log_loss": self.metrics.log_loss,
-            "ece": self.metrics.ece,
-            "latency_p50_ms": self.metrics.latency_p50_ms,
-            "latency_p95_ms": self.metrics.latency_p95_ms,
+            **self.metrics.model_dump(),
             "passes": self.metrics.passes_production_threshold,
             "model_path": self.model_path,
             "mlflow_run_id": self.mlflow_run_id,

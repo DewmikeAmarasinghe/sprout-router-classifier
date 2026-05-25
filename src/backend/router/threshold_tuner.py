@@ -9,7 +9,7 @@ STRATEGY:
     Higher threshold = more messages routed to gpt-4o (safer, more expensive).
     Lower threshold  = more messages routed to gpt-4o-mini (cheaper, riskier).
 
-    Default target: recall_1 >= 0.97. At most 3% of label=1 messages get
+    Default target: recall_1 >= PRODUCTION_RECALL_THRESHOLD. At most 3% of label=1 messages get
     incorrectly sent to gpt-4o-mini — acceptable UX degradation.
 
 OUTPUT:
@@ -17,7 +17,7 @@ OUTPUT:
 
 Usage:
     tuner   = ThresholdTuner()
-    result  = tuner.find_optimal_threshold("v1", predictor, min_recall_1=0.97)
+    result  = tuner.find_optimal_threshold("v1", predictor, min_recall_1=PRODUCTION_RECALL_THRESHOLD)
     print(f"Optimal threshold: {result.optimal_threshold}")
 """
 
@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 
 from backend.shared.path_resolver import get_dataset_path, get_experiment_path
+from backend.shared.settings_manager import settings_manager
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ class ThresholdTuner:
         self,
         dataset_name: str,
         predictor: Any,
-        min_recall_1: float = 0.97,
+        min_recall_1: float = float(settings_manager.get("PRODUCTION_RECALL_THRESHOLD")),
         safe_default_label: int = 1,
     ) -> ThresholdResult:
         """Sweep thresholds on val.csv and return the best one.
@@ -66,7 +67,7 @@ class ThresholdTuner:
         Args:
             dataset_name: Dataset version, e.g. "v1".
             predictor: A RouterPredictor instance with a trained model.
-            min_recall_1: Minimum acceptable recall for label=1 (default 0.97).
+            min_recall_1: Minimum acceptable recall for label=1 (default PRODUCTION_RECALL_THRESHOLD).
             safe_default_label: Label used when confidence < threshold.
 
         Returns:

@@ -7,7 +7,7 @@ MODEL SELECTION RATIONALE:
               START HERE. 125M params, ~50 min on Kaggle T4.
 
   xlmr-large: Same architecture, higher ceiling (560M params). 4× slower.
-              Only if xlmr-base plateaus below recall_1=0.97.
+              Only if xlmr-base plateaus below recall_1=PRODUCTION_RECALL_THRESHOLD.
 
   papluca:    XLM-RoBERTa pre-finetuned on 20-language detection. May need fewer
               epochs due to existing language signal knowledge.
@@ -35,12 +35,21 @@ class TransformerSpec:
     notes: str = ""
 
 
+# MODEL HARDWARE REFERENCE
+# ─────────────────────────────────────────────────────────────────────────────
+# key           params      size (MB)   min VRAM   notes
+# xlmr-base     125M–278M   ~1,000      8 GB+      Standard 12-layer. Start here.
+# xlmr-large    550M–560M   ~2,200      12 GB+     24-layer; 4× compute of base.
+# papluca       ~278M       ~1,000      8 GB+      XLM-R base pre-tuned on lang-detect.
+# muril         ~278M       ~950        8 GB+      South Asian scripts specialist.
+# mbert         178M        ~700        6 GB+      Older cased multilingual baseline.
+# ─────────────────────────────────────────────────────────────────────────────
 TRANSFORMER_REGISTRY: dict[str, TransformerSpec] = {
     "xlmr-base": TransformerSpec(
         key="xlmr-base",
         hf_name="xlm-roberta-base",
-        description="XLM-RoBERTa base (125M params). Best for Sinhala — empirically verified.",
-        notes="START HERE. Handles Singlish, Tanglish, English. ~50 min on Kaggle T4.",
+        description="XLM-RoBERTa base. Best for Sinhala — empirically verified.",
+        notes="Handles Singlish, Tanglish, English. ~50 min on Kaggle T4.",
     ),
     "xlmr-large": TransformerSpec(
         key="xlmr-large",
@@ -67,7 +76,7 @@ TRANSFORMER_REGISTRY: dict[str, TransformerSpec] = {
         notes="Weaker than XLM-R on Sinhala, weaker than MuRIL on Tamil. Baseline only.",
     ),
     # To add new models (encoder-only only):
-    # "indic-bert": TransformerSpec("indic-bert", "ai4bharat/indic-bert", "...", "..."),
+    # "indic-bert": TransformerSpec("indic-bert", "ai4bharat/indic-bert", "...", params_millions=..., ...),
 }
 
 TRAIN_CONFIG: dict[str, int | float | bool | str] = {
@@ -86,6 +95,13 @@ TRAIN_CONFIG: dict[str, int | float | bool | str] = {
     "greater_is_better": True,
     "logging_steps": 50,
     "dataloader_num_workers": 2,
+    # Disk-space guards (critical on Kaggle /kaggle/working — 20 GB limit).
+    # save_total_limit=2  → keep only the latest checkpoint + the best checkpoint;
+    #                       prevents 3 full checkpoints (3 epochs × ~1.5 GB) accumulating.
+    # save_only_model=True → skip optimizer/scheduler state in checkpoints (~1 GB each);
+    #                        safe because we never resume mid-training on Kaggle.
+    "save_total_limit": 2,
+    "save_only_model": True,
 }
 
 HPO_SEARCH_SPACE: dict[str, tuple] = {

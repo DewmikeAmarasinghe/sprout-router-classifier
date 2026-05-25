@@ -1,0 +1,10 @@
+{
+  "study_name": "tfidf_combined__svm",
+  "best_params": {
+    "C": 4.317224210028808,
+    "max_iter": 5000
+  },
+  "best_value": 0.805275241431126,
+  "optimize_metric": "mcc",
+  "n_trials": 10
+}

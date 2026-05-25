@@ -12,10 +12,10 @@ What exactly happens during training:
   3 epochs with load_best_model_at_end=True acts as implicit early stopping.
 
 Auto-HPO:
-  After each training run, if recall_1 < 0.97, Optuna HPO runs automatically
+  After each training run, if recall_1 < PRODUCTION_RECALL_THRESHOLD, Optuna HPO runs automatically
   (default 5 trials). Each trial trains with different hyperparameters and evaluates
   on val.csv. MedianPruner stops bad trials after epoch 1, saving GPU time.
-  If recall_1 >= 0.97, HPO is skipped.
+  If recall_1 >= PRODUCTION_RECALL_THRESHOLD, HPO is skipped.
   Use --no-hpo to disable auto-HPO entirely.
   Use --hpo to force-run HPO regardless of initial recall_1.
 
@@ -47,6 +47,7 @@ logging.basicConfig(
 
 log = logging.getLogger(__name__)
 
+from backend.shared.settings_manager import settings_manager
 from backend.training.transformers.config import TRANSFORMER_REGISTRY
 from backend.training.transformers.trainer import TransformerTrainer
 
@@ -66,7 +67,7 @@ def run_auto_hpo(dataset: str, model_key: str, n_trials: int) -> None:
 
       With n_trials=5 and MedianPruner:
         ~2-3 trials complete fully (~150 min), ~2-3 pruned after epoch 1 (~50 min).
-        Total extra time: ~200-250 min on T4. Worthwhile if initial recall < 0.97.
+        Total extra time: ~200-250 min on T4. Worthwhile if initial recall < PRODUCTION_RECALL_THRESHOLD.
 
       NEVER uses test.csv — only val.csv for evaluation.
     """
@@ -89,7 +90,11 @@ def run_auto_hpo(dataset: str, model_key: str, n_trials: int) -> None:
 
     trainer = TransformerTrainer()
     result = trainer.train_experiment(dataset, model_key, param_overrides=hpo_result.best_params)
-    flag = "✅ PASSES" if result.metrics.passes_production_threshold else "⚠ still below 0.97"
+    flag = (
+        "✅ PASSES"
+        if result.metrics.passes_production_threshold
+        else f"⚠ still below {float(settings_manager.get('PRODUCTION_RECALL_THRESHOLD'))}"
+    )
     log.info(
         f"HPO retrain: recall_1={result.metrics.recall_1:.4f}  MCC={result.metrics.mcc:.4f}  {flag}"
     )
@@ -115,7 +120,7 @@ def main() -> None:
     parser.add_argument(
         "--no-hpo",
         action="store_true",
-        help="Skip automatic HPO even if recall_1 < 0.97.",
+        help="Skip automatic HPO even if recall_1 < PRODUCTION_RECALL_THRESHOLD.",
     )
     parser.add_argument(
         "--hpo",
@@ -161,7 +166,7 @@ def main() -> None:
             if not args.no_hpo and (not result.metrics.passes_production_threshold or args.hpo):
                 if not result.metrics.passes_production_threshold:
                     log.info(
-                        f"recall_1={result.metrics.recall_1:.4f} < 0.97. "
+                        f"recall_1={result.metrics.recall_1:.4f} < {float(settings_manager.get('PRODUCTION_RECALL_THRESHOLD'))}. "
                         f"Running auto-HPO ({args.n_trials} trials)..."
                     )
                 run_auto_hpo(args.dataset, args.model, args.n_trials)

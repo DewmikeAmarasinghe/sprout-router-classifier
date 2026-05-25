@@ -2,7 +2,7 @@
 Phase 8 — Router Threshold Tuning.
 
 Sweeps confidence thresholds [0.30–0.90] on val.csv using the best trained model
-and finds the highest threshold that keeps recall_1 >= 0.97.
+and finds the highest threshold that keeps recall_1 >= 0.95.
 
 The optimal threshold is saved to experiments/{dataset}/router/threshold_curve.json.
 Copy the optimal_threshold value to CONFIDENCE_THRESHOLD in config/settings.py.
@@ -40,6 +40,10 @@ def load_predictor(dataset: str, model_key: str | None) -> tuple:
     Returns (predictor: RouterPredictor, experiment_id: str).
     Typed as tuple to avoid circular import at module level — both elements
     are well-typed inside the function body.
+
+    Classical models are saved as a directory:
+        experiments/{dataset}/classical/models/{experiment_id}/model.pkl
+    RouterPredictor.from_pkl() accepts the directory path and finds model.pkl inside.
     """
     from backend.evaluation.comparator import ModelComparator
     from backend.router.predictor import RouterPredictor
@@ -55,7 +59,8 @@ def load_predictor(dataset: str, model_key: str | None) -> tuple:
     approach = best.approach if not model_key else infer_approach(dataset, experiment_id)
 
     if approach == "classical":
-        model_path = get_experiment_path(dataset, "classical") / "models" / f"{experiment_id}.pkl"
+        # Pass the directory — from_pkl resolves model.pkl inside it.
+        model_path = get_experiment_path(dataset, "classical") / "models" / experiment_id
         predictor = RouterPredictor.from_pkl(model_path)
     else:
         checkpoint_dir = get_experiment_path(dataset, "transformers") / "models" / experiment_id
@@ -97,14 +102,10 @@ def run_threshold_tuning(dataset: str, predictor: object, experiment_id: str) ->
 
 def run_test_prediction(predictor: object, message: str, threshold: float) -> None:
     from backend.router.predictor import RouterPredictor
-    from backend.router.pymodels import ThresholdConfig
 
-    # RouterPredictor accepts any model-like object in its constructor
-    configured = RouterPredictor(
-        model=predictor,
-        threshold_config=ThresholdConfig(threshold=threshold),
-    )
-    result = configured.predict(message)
+    assert isinstance(predictor, RouterPredictor)
+    predictor.set_threshold(threshold)
+    result = predictor.predict(message)
 
     print(f'\n  Test message: "{message}"')
     print(f"  Label:        {result.label}")

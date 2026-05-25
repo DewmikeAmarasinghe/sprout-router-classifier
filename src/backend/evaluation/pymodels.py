@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from backend.training.pymodels import MetricsResult
+
 
 class ComparisonRow(BaseModel):
     """One row in the master model comparison table."""
@@ -12,20 +14,49 @@ class ComparisonRow(BaseModel):
     approach: str  # "classical" | "transformer"
     model_name: str
     dataset_name: str
-    recall_1: float
-    precision_1: float
-    recall_0: float
-    precision_0: float
-    mcc: float
-    roc_auc: float
-    f1_macro: float
-    log_loss: float
-    accuracy: float
-    latency_p50_ms: float
-    latency_p95_ms: float
     passes_production_threshold: bool
     mlflow_run_id: str = ""
     notes: str = ""
+
+    # All metrics — kept in sync with MetricsResult via from_experiment().
+    accuracy: float = 0.0
+    precision_0: float = 0.0
+    precision_1: float = 0.0
+    recall_0: float = 0.0
+    recall_1: float = 0.0
+    f1_macro: float = 0.0
+    f1_weighted: float = 0.0
+    mcc: float = 0.0
+    roc_auc: float = 0.0
+    pr_auc: float = 0.0
+    log_loss: float = 0.0
+    ece: float = 0.0
+    latency_mean_ms: float = 0.0
+    latency_p50_ms: float = 0.0
+    latency_p95_ms: float = 0.0
+    latency_p99_ms: float = 0.0
+
+    @classmethod
+    def from_experiment(
+        cls,
+        experiment_id: str,
+        approach: str,
+        model_name: str,
+        dataset_name: str,
+        metrics: MetricsResult,
+        mlflow_run_id: str = "",
+        notes: str = "",
+    ) -> ComparisonRow:
+        return cls(
+            experiment_id=experiment_id,
+            approach=approach,
+            model_name=model_name,
+            dataset_name=dataset_name,
+            passes_production_threshold=metrics.passes_production_threshold,
+            mlflow_run_id=mlflow_run_id,
+            notes=notes,
+            **metrics.model_dump(),
+        )
 
 
 class CostSimResult(BaseModel):

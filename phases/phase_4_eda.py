@@ -82,11 +82,11 @@ def run_actual_eda(dataset: str) -> None:
     COLORS = ["#2196F3", "#F44336", "#4CAF50", "#FF9800", "#9C27B0"]
     plt.style.use("seaborn-v0_8-darkgrid")
 
-    _plot_label_distribution(df, dataset, plots_dir, COLORS)
-    _plot_language_distribution(df, dataset, plots_dir, COLORS)
-    _plot_scenario_distribution(df, dataset, plots_dir)
-    _plot_word_length_by_label(df, dataset, plots_dir, COLORS)
-    _plot_word_length_by_language(df, dataset, plots_dir)
+    plot_label_distribution(df, dataset, plots_dir, COLORS)
+    plot_language_distribution(df, dataset, plots_dir, COLORS)
+    plot_scenario_distribution(df, dataset, plots_dir)
+    plot_word_length_by_label(df, dataset, plots_dir, COLORS)
+    plot_word_length_by_language(df, dataset, plots_dir)
 
     print("\n" + "═" * 55)
     print(f"  EDA — {dataset} (train set)")
@@ -205,7 +205,7 @@ def run_planned_eda(dataset: str) -> None:
 # ── Plot helpers ──────────────────────────────────────────────────────────────
 
 
-def _plot_label_distribution(df, dataset, plots_dir, COLORS):
+def plot_label_distribution(df, dataset, plots_dir, COLORS):
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(6, 4))
@@ -226,7 +226,7 @@ def _plot_label_distribution(df, dataset, plots_dir, COLORS):
     plt.close(fig)
 
 
-def _plot_language_distribution(df, dataset, plots_dir, COLORS):
+def plot_language_distribution(df, dataset, plots_dir, COLORS):
     import matplotlib.pyplot as plt
 
     lang_counts = df["language"].value_counts()
@@ -242,7 +242,7 @@ def _plot_language_distribution(df, dataset, plots_dir, COLORS):
     plt.close(fig)
 
 
-def _plot_scenario_distribution(df, dataset, plots_dir):
+def plot_scenario_distribution(df, dataset, plots_dir):
     import matplotlib.pyplot as plt
 
     sc_counts = df["scenario"].value_counts()
@@ -258,7 +258,7 @@ def _plot_scenario_distribution(df, dataset, plots_dir):
     plt.close(fig)
 
 
-def _plot_word_length_by_label(df, dataset, plots_dir, COLORS):
+def plot_word_length_by_label(df, dataset, plots_dir, COLORS):
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(8, 4))
@@ -279,7 +279,7 @@ def _plot_word_length_by_label(df, dataset, plots_dir, COLORS):
     plt.close(fig)
 
 
-def _plot_word_length_by_language(df, dataset, plots_dir):
+def plot_word_length_by_language(df, dataset, plots_dir):
     import matplotlib.pyplot as plt
 
     lang_order = df["language"].value_counts().index.tolist()

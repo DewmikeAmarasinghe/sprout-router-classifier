@@ -2,7 +2,7 @@
 Evaluation metrics for the binary router classifier.
 
 All metrics use sklearn under the hood. The key metric for this project is
-recall(label=1) >= 0.97 — we must never send a complex/code-mixed message
+recall(label=1) >= PRODUCTION_RECALL_THRESHOLD — we must never send a complex/code-mixed message
 to gpt-4o-mini. False negatives are more costly than false positives.
 
 See docs/05_EVALUATION_PLAN.md for full metric rationale.
@@ -26,6 +26,8 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+from backend.shared.settings_manager import settings_manager
+
 
 def compute_all_metrics(
     y_true: list[int],
@@ -44,7 +46,7 @@ def compute_all_metrics(
         Dict of metric_name → float value.
 
     Key metrics to watch:
-        recall_1        ← MUST be >= 0.97 in production
+        recall_1        ← MUST be >= PRODUCTION_RECALL_THRESHOLD in production
         precision_1     ← want this high to avoid unnecessary gpt-4o routing
         mcc             ← summary statistic: 1.0 = perfect, 0.0 = random
         roc_auc         ← discrimination ability (requires y_proba)
@@ -152,7 +154,10 @@ def print_metrics_report(
     print(f"{'═' * 50}")
 
     key_metrics = [
-        ("recall_1", "Recall (label=1)  ← MUST >= 0.97"),
+        (
+            "recall_1",
+            f"Recall (label=1)  ← MUST >= {float(settings_manager.get('PRODUCTION_RECALL_THRESHOLD'))}",
+        ),
         ("precision_1", "Precision (label=1)"),
         ("recall_0", "Recall (label=0)"),
         ("precision_0", "Precision (label=0)"),
@@ -162,7 +167,12 @@ def print_metrics_report(
     ]
     for key, label in key_metrics:
         if key in metrics:
-            flag = " ⚠️" if key == "recall_1" and metrics[key] < 0.97 else ""
+            flag = (
+                " ⚠️"
+                if key == "recall_1"
+                and metrics[key] < float(settings_manager.get("PRODUCTION_RECALL_THRESHOLD"))
+                else ""
+            )
             print(f"  {label:<35} {metrics[key]:.4f}{flag}")
 
     optional = [

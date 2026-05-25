@@ -104,6 +104,7 @@ def get_config() -> dict:
     return {
         "confidence_threshold": settings_manager.get("CONFIDENCE_THRESHOLD"),
         "safe_default_label": settings_manager.get("SAFE_DEFAULT_LABEL"),
+        "production_recall_threshold": settings_manager.get("PRODUCTION_RECALL_THRESHOLD"),
         "routed_to_on_default": (
             "gpt-4o" if settings_manager.get("SAFE_DEFAULT_LABEL") == 1 else "gpt-4o-mini"
         ),

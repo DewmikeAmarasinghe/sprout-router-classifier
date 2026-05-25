@@ -1,18 +1,29 @@
 """
 RouterPredictor — uniform inference interface for classical and transformer models.
 
-INTERFACE HISTORY:
-  predict(text) now returns RoutingResult (not int).
-  Callers that used `if predictor.predict(t) == 1` should use `result.label == 1`.
-  The old pattern `RouterPredictor(model=p._model, threshold_config=ThresholdConfig(...))`
-  is now replaced by `predictor.set_threshold(t); predictor.predict(text)`.
-  ThresholdConfig is still accepted in __init__ for backward-compatible call sites.
+ROUTING PIPELINE (in predict()):
+  1. Script detection (script_detector.is_pure_script):
+       Pure Sinhala/Tamil Unicode → mandatory label=1, confidence=1.0, skip ML.
+  2. ML model confidence:
+       Classical: vectorizer → predict_proba[:, 1]
+       Transformer: tokenizer → forward → softmax[:, 1]
+  3. Threshold check:
+       confidence ≥ threshold → label=1 (gpt-4o)
+       confidence <  threshold → label=0 (gpt-4o-mini)
 
-BUGS FIXED:
-  - from_pkl loaded {"vectorizer": v, "classifier": c} dict as self._model, then
-    called self._model.predict_proba() → AttributeError. Fixed: unpack dict.
-  - from_pkl path resolution tried .pkl extension before checking if path is a
-    directory → FileNotFoundError. Fixed: tries candidates in priority order.
+All callers (routes_router.py, panel_router.py, ablation.py, phase_8_router.py)
+call predict(text) → RoutingResult. Script detection is automatic and transparent.
+
+INTERFACE:
+  from_pkl(path)               → loads classical model (directory or .pkl file)
+  from_hf_checkpoint(path)     → loads HuggingFace fine-tuned model
+  predict(text) → RoutingResult
+  predict_batch(texts) → list[RoutingResult]
+  set_threshold(float)
+
+BUGS FIXED vs earlier versions:
+  - from_pkl unpacks {"vectorizer": v, "classifier": c} dict correctly.
+  - threshold_config accepted in __init__ for backward-compatible callers.
 """
 
 from __future__ import annotations
@@ -79,11 +90,7 @@ class RouterPredictor:
 
         if pkl_path is None:
             tried = "\n  ".join(str(c) for c in candidates)
-            raise FileNotFoundError(
-                f"Model not found for path: {model_path}\n"
-                f"  Tried:\n  {tried}\n"
-                f"  Ensure trainer saved model.pkl inside the experiment directory."
-            )
+            raise FileNotFoundError(f"Model not found for path: {model_path}\n  Tried:\n  {tried}")
 
         log.info(f"Loaded model from {pkl_path}")
 
@@ -115,7 +122,34 @@ class RouterPredictor:
         self._threshold = threshold
 
     def predict(self, text: str) -> RoutingResult:
-        """Route one message. Returns RoutingResult with label, model, confidence, reason."""
+        """Route one message through the three-layer decision pipeline.
+
+        Layer 1 — Script detection:
+            If the text contains pure Sinhala or Tamil Unicode script (not romanized),
+            it is mandatory gpt-4o. No ML inference needed.
+
+        Layer 2 — ML confidence:
+            P(label=1) from the trained classifier.
+
+        Layer 3 — Threshold:
+            confidence >= threshold → gpt-4o (label=1)
+            confidence <  threshold → gpt-4o-mini (label=0)
+        """
+        # Layer 1: pure Unicode script check
+        try:
+            from backend.shared.script_detector import is_pure_script
+
+            if is_pure_script(text):
+                return RoutingResult(
+                    label=1,
+                    routed_to="gpt-4o",
+                    confidence=1.0,
+                    routing_reason="Pure Sinhala/Tamil Unicode script detected → mandatory gpt-4o",
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.debug(f"Script detector error (skipping): {exc}")
+
+        # Layer 2+3: ML confidence + threshold
         confidence = self._get_confidence(text)
         label = 1 if confidence >= self._threshold else 0
         routed_to = "gpt-4o" if label == 1 else "gpt-4o-mini"
@@ -136,15 +170,15 @@ class RouterPredictor:
         return [self.predict(t) for t in texts]
 
     def predict_proba(self, text: str) -> float:
-        """Return P(label=1). Used by threshold tuner and comparator."""
+        """Return P(label=1). Used by threshold tuner and comparator.
+
+        Note: does NOT apply script detection — intentional, for evaluation purposes
+        where we want to measure the ML model's raw output.
+        """
         return self._get_confidence(text)
 
     def _get_confidence(self, text: str) -> float:
-        """Return P(label=1).
-
-        Classical path: vectorizer.transform([text]) → classifier.predict_proba.
-        Transformer path: tokenizer → model forward → softmax[:, 1].
-        """
+        """Return P(label=1) from the ML model only (no script detection here)."""
         if self._vectorizer is not None and hasattr(self._vectorizer, "transform"):
             vec: Any = self._vectorizer.transform([text])
             proba: Any = self._model.predict_proba(vec)

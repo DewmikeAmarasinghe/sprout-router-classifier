@@ -42,6 +42,7 @@ from scipy.special import softmax
 
 from backend.shared.metrics import compute_all_metrics
 from backend.shared.path_resolver import get_dataset_path, get_experiment_path
+from backend.shared.settings_manager import settings_manager
 from backend.training.pymodels import ExperimentResult, MetricsResult
 from backend.training.transformers.config import TRAIN_CONFIG, TRANSFORMER_REGISTRY
 
@@ -137,6 +138,13 @@ class TransformerTrainer:
         log.info("  Evaluating on val set ...")
         trainer.evaluate()
 
+        # get_logits_and_labels calls trainer.predict() which requires the model on GPU
+        # (DataParallel maps to cuda:0). This MUST run before benchmark_latency() and
+        # measure_peak_ram() because both of those call model.to("cpu"), which would
+        # leave the model on CPU and cause:
+        #   RuntimeError: module must have its parameters on cuda:0 but found one on cpu
+        val_logits, val_labels = get_logits_and_labels(trainer, val_ds)
+
         log.info("  Benchmarking latency (500 samples, CPU) ...")
         latency_stats = benchmark_latency(
             model, tokenizer, val_df["text"].tolist()[:500], max_length
@@ -144,8 +152,6 @@ class TransformerTrainer:
 
         log.info("  Measuring peak inference RAM ...")
         peak_ram_mb = measure_peak_ram(model, tokenizer, val_df["text"].tolist()[:100], max_length)
-
-        val_logits, val_labels = get_logits_and_labels(trainer, val_ds)
         val_preds = np.argmax(val_logits, axis=-1)
         val_proba = softmax(val_logits, axis=-1)[:, 1]
         raw_metrics = compute_all_metrics(
@@ -162,10 +168,13 @@ class TransformerTrainer:
 
         log.info(f"  Results: {metrics.summary_line()}")
         if not metrics.passes_production_threshold:
-            log.warning(f"  recall_1 = {metrics.recall_1:.4f} < 0.97 — not production-safe")
+            log.warning(
+                f"  recall_1 = {metrics.recall_1:.4f} < {float(settings_manager.get('PRODUCTION_RECALL_THRESHOLD'))} — not production-safe"
+            )
 
         trainer.save_model(str(output_dir))
         tokenizer.save_pretrained(str(output_dir))
+        cleanup_checkpoints(output_dir)
         log.info(f"  Checkpoint saved: {output_dir}")
 
         mlflow_run_id = log_to_mlflow(
@@ -237,8 +246,28 @@ def build_training_args(config: dict, output_dir: Path) -> TrainingArguments:
         greater_is_better=bool(config["greater_is_better"]),
         logging_steps=int(config["logging_steps"]),
         dataloader_num_workers=int(config["dataloader_num_workers"]),
+        save_total_limit=int(config["save_total_limit"]),
+        save_only_model=bool(config["save_only_model"]),
         report_to="none",
     )
+
+
+def cleanup_checkpoints(output_dir: Path) -> None:
+    """Delete checkpoint-* subdirectories left by HuggingFace Trainer.
+
+    After trainer.save_model() writes the final model directly into output_dir,
+    the intermediate checkpoint-{step}/ subdirs are no longer needed. Removing
+    them recovers ~500 MB–1 GB per model on Kaggle's limited disk.
+    """
+    import shutil
+
+    removed = 0
+    for entry in output_dir.iterdir():
+        if entry.is_dir() and entry.name.startswith("checkpoint-"):
+            shutil.rmtree(entry, ignore_errors=True)
+            removed += 1
+    if removed:
+        log.info(f"  Cleaned up {removed} checkpoint dir(s) from {output_dir}")
 
 
 def get_logits_and_labels(

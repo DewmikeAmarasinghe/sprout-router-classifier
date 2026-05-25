@@ -6,7 +6,7 @@ Two sections:
   Transformers  — GPU-intensive, runs locally or on Kaggle
 
 All training logic lives in backend/training/ — this panel is a thin display layer.
-Key metric: recall_1 >= 0.97 required for production deployment.
+Key metric: recall_1 >= PRODUCTION_RECALL_THRESHOLD required for production deployment.
 """
 
 from __future__ import annotations
@@ -21,6 +21,11 @@ import gradio as gr
 
 from backend.shared.path_resolver import get_experiment_path
 from backend.shared.settings_manager import settings_manager
+from backend.training.pymodels import (
+    CLASSICAL_TABLE_HEADERS,
+    TRANSFORMER_TABLE_HEADERS,
+    MetricsResult,
+)
 
 log = logging.getLogger(__name__)
 
@@ -57,29 +62,16 @@ def load_classical_results(dataset: str) -> list[list]:
             continue
         try:
             r = json.loads(result_path.read_text())
-            rows.append(
-                [
-                    r.get("vectorizer_key", ""),
-                    r.get("classifier_key", ""),
-                    f"{r.get('recall_1', 0):.4f}",
-                    f"{r.get('precision_1', 0):.4f}",
-                    f"{r.get('recall_0', 0):.4f}",
-                    f"{r.get('precision_0', 0):.4f}",
-                    f"{r.get('mcc', 0):.4f}",
-                    f"{r.get('roc_auc', 0):.4f}",
-                    f"{r.get('pr_auc', 0):.4f}",
-                    f"{r.get('f1_macro', 0):.4f}",
-                    f"{r.get('log_loss', 0):.4f}",
-                    f"{r.get('ece', 0):.4f}",
-                    f"{r.get('latency_p50_ms', 0):.1f}ms",
-                    f"{r.get('latency_p95_ms', 0):.1f}ms",
-                    "✅" if r.get("passes", False) else "❌",
-                ]
-            )
+            row: list = [r.get("vectorizer_key", ""), r.get("classifier_key", "")]
+            for field in MetricsResult.field_names():
+                row.append(MetricsResult.format_cell(field, float(r.get(field, 0))))
+            row.append("✅" if r.get("passes", False) else "❌")
+            rows.append(row)
         except Exception:  # noqa: BLE001
             continue
 
-    return sorted(rows, key=lambda row: -float(row[2]))
+    recall_col = 2 + MetricsResult.field_names().index("recall_1")
+    return sorted(rows, key=lambda row: -float(row[recall_col].rstrip("ms")))
 
 
 def load_transformer_results(dataset: str) -> list[list]:
@@ -96,28 +88,16 @@ def load_transformer_results(dataset: str) -> list[list]:
             continue
         try:
             r = json.loads(result_path.read_text())
-            rows.append(
-                [
-                    r.get("model_name", "") or r.get("experiment_id", ""),
-                    f"{r.get('recall_1', 0):.4f}",
-                    f"{r.get('precision_1', 0):.4f}",
-                    f"{r.get('recall_0', 0):.4f}",
-                    f"{r.get('precision_0', 0):.4f}",
-                    f"{r.get('mcc', 0):.4f}",
-                    f"{r.get('roc_auc', 0):.4f}",
-                    f"{r.get('pr_auc', 0):.4f}",
-                    f"{r.get('f1_macro', 0):.4f}",
-                    f"{r.get('log_loss', 0):.4f}",
-                    f"{r.get('ece', 0):.4f}",
-                    f"{r.get('latency_p50_ms', 0):.1f}ms",
-                    f"{r.get('latency_p95_ms', 0):.1f}ms",
-                    "✅" if r.get("passes", False) else "❌",
-                ]
-            )
+            row: list = [r.get("model_name", "") or r.get("experiment_id", "")]
+            for field in MetricsResult.field_names():
+                row.append(MetricsResult.format_cell(field, float(r.get(field, 0))))
+            row.append("✅" if r.get("passes", False) else "❌")
+            rows.append(row)
         except Exception:  # noqa: BLE001
             continue
 
-    return sorted(rows, key=lambda row: -float(row[1]))
+    recall_col = 1 + MetricsResult.field_names().index("recall_1")
+    return sorted(rows, key=lambda row: -float(row[recall_col].rstrip("ms")))
 
 
 def train_one_classical(dataset: str, vectorizer_key: str, classifier_key: str) -> str:
@@ -136,7 +116,7 @@ def train_one_classical(dataset: str, vectorizer_key: str, classifier_key: str) 
         flag = "✅ PASSES" if m.passes_production_threshold else "❌ FAILS"
         return (
             f"Experiment: {result.experiment_id}\n\n"
-            f"  recall_1    = {m.recall_1:.4f}   ← {flag} (threshold: 0.97)\n"
+            f"  recall_1    = {m.recall_1:.4f}   ← {flag} (threshold: {float(settings_manager.get('PRODUCTION_RECALL_THRESHOLD'))})\n"
             f"  recall_0    = {m.recall_0:.4f}\n"
             f"  precision_1 = {m.precision_1:.4f}\n"
             f"  precision_0 = {m.precision_0:.4f}\n"
@@ -154,17 +134,54 @@ def train_one_classical(dataset: str, vectorizer_key: str, classifier_key: str) 
         return f"Error: {exc}"
 
 
+def run_hpo_classical(dataset: str, vectorizer_key: str, classifier_key: str) -> str:
+    if not vectorizer_key or not classifier_key:
+        return "Select both a vectorizer and a classifier first."
+
+    try:
+        from backend.training.classical.hpo import ClassicalHPORunner
+        from backend.training.classical.trainer import ClassicalMLTrainer
+
+        hpo_result = ClassicalHPORunner().run(
+            dataset_name=dataset,
+            vectorizer_key=vectorizer_key,
+            classifier_key=classifier_key,
+            n_trials=10,
+            optimize_metric="mcc",
+        )
+        tuned = ClassicalMLTrainer().train_experiment(
+            dataset,
+            vectorizer_key,
+            classifier_key,
+            classifier_params=hpo_result.best_params,
+        )
+        m = tuned.metrics
+        flag = "✅ PASSES" if m.passes_production_threshold else "❌ FAILS"
+        return (
+            f"HPO complete — {tuned.experiment_id}\n\n"
+            f"  Best params: {hpo_result.best_params}\n\n"
+            f"  recall_1    = {m.recall_1:.4f}   ← {flag}\n"
+            f"  MCC         = {m.mcc:.4f}\n"
+            f"  ROC-AUC     = {m.roc_auc:.4f}\n"
+            f"  latency p95 = {m.latency_p95_ms:.1f}ms\n\n"
+            f"Model saved: {tuned.model_path}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"Error: {exc}"
+
+
 def train_all_classical(dataset: str) -> str:
     dataset_dir = get_experiment_path(dataset, "classical").parent.parent
     if not (dataset_dir / "train.csv").exists():
         return f"train.csv not found for dataset '{dataset}'. Run phase_3_split.py first."
 
     try:
-        from backend.training.classical.config import ACTIVE_COMBOS
+        from backend.training.classical.config import CLASSIFIER_REGISTRY, VECTORIZER_REGISTRY
         from backend.training.classical.trainer import ClassicalMLTrainer
 
-        results = ClassicalMLTrainer().train_all_combos(dataset)
-        lines = [f"Completed {len(results)}/{len(ACTIVE_COMBOS)} experiments:\n"]
+        all_combos = [(vec, clf) for vec in VECTORIZER_REGISTRY for clf in CLASSIFIER_REGISTRY]
+        results = ClassicalMLTrainer().train_combos(dataset, combos=all_combos)
+        lines = [f"Completed {len(results)}/{len(all_combos)} experiments:\n"]
         lines.append(f"  {'Experiment':<40} {'recall_1':>8} {'MCC':>7} {'pass':>5}")
         lines.append("  " + "─" * 60)
 
@@ -175,14 +192,18 @@ def train_all_classical(dataset: str) -> str:
             )
 
         passing = [r for r in results if r.metrics.passes_production_threshold]
+        threshold = float(settings_manager.get("PRODUCTION_RECALL_THRESHOLD"))
         if passing:
             best = max(passing, key=lambda r: r.metrics.mcc)
             lines += [
                 "",
                 f"Best: {best.experiment_id}  recall_1={best.metrics.recall_1:.4f}  MCC={best.metrics.mcc:.4f}",
+                f"({len(passing)} of {len(results)} passed recall_1 ≥ {threshold})",
             ]
         else:
-            lines.append("\n⚠ No model passed recall_1 >= 0.97. Run HPO or train transformers.")
+            lines.append(
+                f"\n⚠ No model passed recall_1 >= {threshold}. Run HPO or train transformers."
+            )
 
         return "\n".join(lines)
     except Exception as exc:  # noqa: BLE001
@@ -244,6 +265,62 @@ def stream_train_transformer(dataset: str, model_key: str) -> Generator[str, Non
         break
 
 
+def stream_hpo_transformer(dataset: str, model_key: str) -> Generator[str, None, None]:
+    if not model_key:
+        yield "Select a model first."
+        return
+
+    updates: queue.SimpleQueue[str] = queue.SimpleQueue()
+
+    def thread_target() -> None:
+        try:
+            from backend.training.transformers.hpo import TransformerHPORunner
+            from backend.training.transformers.trainer import TransformerTrainer
+
+            hpo_result = TransformerHPORunner().run(
+                dataset_name=dataset,
+                model_key=model_key,
+                n_trials=5,
+            )
+            result = TransformerTrainer().train_experiment(
+                dataset, model_key, param_overrides=hpo_result.best_params
+            )
+            m = result.metrics
+            flag = "✅ PASSES" if m.passes_production_threshold else "❌ FAILS"
+            updates.put(
+                f"__DONE__"
+                f"HPO complete — {result.experiment_id}\n"
+                f"Best params: {hpo_result.best_params}\n\n"
+                f"recall_1:    {m.recall_1:.4f}   ← {flag}\n"
+                f"MCC:         {m.mcc:.4f}\n"
+                f"ROC-AUC:     {m.roc_auc:.4f}\n"
+                f"Latency p95: {m.latency_p95_ms:.1f}ms\n"
+                f"Checkpoint:  {result.model_path}"
+            )
+        except Exception as exc:  # noqa: BLE001
+            updates.put(f"__ERROR__{exc}")
+
+    threading.Thread(target=thread_target, daemon=True).start()
+
+    yield (
+        f"Running HPO for {model_key} — 5 trials × 3 epochs each.\n"
+        "⚠ This can take several hours on GPU. Check terminal for Optuna progress."
+    )
+
+    while True:
+        try:
+            msg = updates.get(timeout=5.0)
+        except queue.Empty:
+            yield f"HPO {model_key}... still running. Check terminal for progress."
+            continue
+
+        if msg.startswith("__DONE__"):
+            yield f"✅ HPO complete!\n\n{msg[8:]}"
+        elif msg.startswith("__ERROR__"):
+            yield f"❌ HPO failed:\n{msg[9:]}"
+        break
+
+
 def build() -> None:
     dataset_box = gr.Textbox(
         value=settings_manager.get("DATASET_VERSION"),
@@ -254,30 +331,15 @@ def build() -> None:
     with gr.Accordion("⚡ Classical ML", open=True):
         gr.Markdown(
             "Fast sklearn models: TF-IDF + classifier combinations. Runs locally in minutes.\n\n"
-            "**Production threshold: recall_1 ≥ 0.97**\n\n"
-            "Classical training: sklearn fits in a single pass — no epochs."
+            f"**Production threshold: recall_1 ≥ {float(settings_manager.get('PRODUCTION_RECALL_THRESHOLD'))}**\n\n"
+            "Classical training: sklearn fits in a single pass — no epochs. "
+            "HPO (Optuna, 10 trials) runs automatically after `--all` / `--all-active` and picks the best hyperparameters."
         )
 
         with gr.Accordion("📋 Previous Results (all metrics)", open=True):
             classical_table = gr.Dataframe(
-                headers=[
-                    "Vectorizer",
-                    "Classifier",
-                    "recall_1",
-                    "prec_1",
-                    "recall_0",
-                    "prec_0",
-                    "MCC",
-                    "ROC-AUC",
-                    "PR-AUC",
-                    "f1_macro",
-                    "log_loss",
-                    "ECE",
-                    "p50ms",
-                    "p95ms",
-                    "Pass",
-                ],
-                datatype=["str"] * 15,
+                headers=CLASSICAL_TABLE_HEADERS,
+                datatype=["str"] * len(CLASSICAL_TABLE_HEADERS),
                 interactive=False,
             )
             refresh_classical_btn = gr.Button("🔄 Load Results", size="sm")
@@ -292,18 +354,24 @@ def build() -> None:
                 )
                 clf_dd = gr.Dropdown(choices=classifier_choices(), value="svm", label="Classifier")
             gr.Markdown(
-                "HPO: `python phases/phase_5_train_classical.py --vectorizer tfidf_combined --classifier svm --hpo --n-trials 20`\n\n"
-                "HPO uses the val set to tune hyperparameters — run it AFTER seeing initial results, targeting the best model."
+                "Any vectorizer × classifier combination is supported. "
+                "`ACTIVE_COMBOS` is the curated subset used by `--all-active`."
             )
-            train_one_btn = gr.Button("▶ Train", variant="secondary")
+            with gr.Row():
+                train_one_btn = gr.Button("▶ Train", variant="secondary")
+                hpo_one_btn = gr.Button("🔬 Run HPO", variant="secondary")
             train_one_out = gr.Textbox(label="Result", lines=16, interactive=False)
             train_one_btn.click(
                 fn=train_one_classical, inputs=[dataset_box, vec_dd, clf_dd], outputs=train_one_out
             )
+            hpo_one_btn.click(
+                fn=run_hpo_classical, inputs=[dataset_box, vec_dd, clf_dd], outputs=train_one_out
+            )
 
-        with gr.Accordion("🚀 Run All Active Combos", open=True):
+        with gr.Accordion("🚀 Run All Combos", open=True):
             gr.Markdown(
-                "Runs all 13 combinations in `ACTIVE_COMBOS` sequentially. ~30–60 min total."
+                "Runs all 25 combinations (5 vectorizers × 5 classifiers) sequentially. ~60–90 min total.\n\n"
+                "For the curated subset only: `python phases/phase_5_train_classical.py --all-active`"
             )
             train_all_btn = gr.Button("🚀 Train All", variant="primary")
             train_all_out = gr.Textbox(label="Summary", lines=20, interactive=False)
@@ -320,23 +388,8 @@ def build() -> None:
 
         with gr.Accordion("📋 Previous Results (all metrics)", open=True):
             transformer_table = gr.Dataframe(
-                headers=[
-                    "Model",
-                    "recall_1",
-                    "prec_1",
-                    "recall_0",
-                    "prec_0",
-                    "MCC",
-                    "ROC-AUC",
-                    "PR-AUC",
-                    "f1_macro",
-                    "log_loss",
-                    "ECE",
-                    "p50ms",
-                    "p95ms",
-                    "Pass",
-                ],
-                datatype=["str"] * 14,
+                headers=TRANSFORMER_TABLE_HEADERS,
+                datatype=["str"] * len(TRANSFORMER_TABLE_HEADERS),
                 interactive=False,
             )
             refresh_transformer_btn = gr.Button("🔄 Load Results", size="sm")
@@ -344,18 +397,25 @@ def build() -> None:
                 fn=load_transformer_results, inputs=dataset_box, outputs=transformer_table
             )
 
-        with gr.Accordion("▶ Train Locally (GPU recommended)", open=True):
+        with gr.Accordion("▶ Train (GPU recommended)", open=True):
             transformer_dd = gr.Dropdown(
                 choices=transformer_model_choices(),
                 value="xlmr-base",
                 label="Model (train xlmr-base first — 3 epochs, ~50 min on T4)",
             )
-            train_transformer_btn = gr.Button("▶ Train Locally", variant="secondary")
+            with gr.Row():
+                train_transformer_btn = gr.Button("▶ Train", variant="secondary")
+                hpo_transformer_btn = gr.Button("🔬 Run HPO", variant="secondary")
             transformer_out = gr.Textbox(
                 label="Training output (progress in terminal)", lines=16, interactive=False
             )
             train_transformer_btn.click(
                 fn=stream_train_transformer,
+                inputs=[dataset_box, transformer_dd],
+                outputs=transformer_out,
+            )
+            hpo_transformer_btn.click(
+                fn=stream_hpo_transformer,
                 inputs=[dataset_box, transformer_dd],
                 outputs=transformer_out,
             )
@@ -366,18 +426,15 @@ def build() -> None:
 
 | Session | Models | Time |
 |---------|--------|------|
-| 1 | Classical (`--all`) + xlmr-base | ~70 min |
+| 1 | Classical (`--all-active`) + xlmr-base | ~70 min |
 | 2 | papluca + muril | ~100 min |
 | 3 | mbert (+ xlmr-large if needed) | ~150 min |
 
 **Setup:** Upload `kaggle_train_transformers.py`, set GPU T4 x2, run all cells.
 
-**HPO** (optional, run after initial training):
-```
-python phases/phase_5_train_classical.py --vectorizer tfidf_combined --classifier svm --hpo --n-trials 20
-python phases/phase_6_train_transformers.py --model xlmr-base --hpo --n-trials 10
-```
-HPO uses the **val set** during training to optimise hyperparameters. It does NOT use test.csv.
+**HPO** runs automatically after `--all-active` (classical) and after each transformer if recall_1 < threshold.
+Use `--no-hpo` to skip. Use `--hpo` to force HPO even when recall already passes.
+HPO uses the **val set** only — it never touches test.csv.
 """)
             gr.Code(
                 value=(

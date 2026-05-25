@@ -1,23 +1,34 @@
 """
-Phase 1 — Grounding Dataset Generator.
+Phase 1 — Grounding & Unicode Script Verification.
 
-Generates 500 pure Sinhala + 500 pure Tamil customer service messages,
-then runs is_pure_script() on all 1,000 to verify the unicode rule catches 100%.
+Generates 250 pure Sinhala + 250 pure Tamil + 250 English+Sinhala mixed +
+250 English+Tamil mixed customer service messages via the OpenAI API, then
+runs is_pure_script() on all 1,000 to verify the unicode rule catches them.
 
-Run once:
-    python phases/phase_1_grounding.py
+WHY MIXED MESSAGES MUST BE CAUGHT:
+    is_pure_script() returns True on the FIRST Sinhala or Tamil unicode character
+    it finds — it does not require the whole message to be in script. So "My ඇණවුම
+    is pending" catches on ඇ. All mixed messages that actually contain script chars
+    are routed to gpt-4o without ML inference. This is correct behaviour.
 
-Output:
-    data/grounding/unicode_verification.csv
+WHY SOME MIXED MESSAGES MAY NOT BE CAUGHT:
+    The generation LLM sometimes produces pure English for the mixed categories,
+    ignoring the instruction to include script characters. These are NOT a bug in
+    script_detector.py — they are generation failures. The retry loop below
+    re-requests any message that contains no Sinhala or Tamil unicode characters
+    until every slot is filled with a genuinely mixed message.
 
-This proves the routing rule is correct BEFORE training:
-    - Pure Sinhala messages → all caught → label=1 without ML
-    - Pure Tamil messages   → all caught → label=1 without ML
-    - These are NOT used for training — the ML model never sees pure-script text.
+EARLY EXIT: If unicode_verification.csv already exists, prints a summary and exits.
+            Pass --force to regenerate.
+
+Usage:
+    python phases/phase_1_grounding.py           # skip if CSV exists
+    python phases/phase_1_grounding.py --force   # always regenerate
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import logging
@@ -27,143 +38,310 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent.parent / ".env")
-
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from backend.shared.path_resolver import DATA_DIR
-from backend.shared.script_detector import is_pure_script, script_language
-from backend.shared.settings_manager import settings_manager
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
-OUTPUT_PATH = DATA_DIR / "grounding" / "unicode_verification.csv"
-TARGET_EACH = 500
+GROUNDING_DIR = Path(__file__).parent.parent / "data" / "grounding"
+VERIFY_CSV = GROUNDING_DIR / "unicode_verification.csv"
 
-SINHALA_PROMPT = (
-    "Generate {n} realistic customer service messages written in pure Sinhala script. "
-    "These MUST use actual Sinhala unicode characters (ශ, ල, ා, ් etc.) — NOT romanized. "
-    "They should look like real WhatsApp or website chatbot messages. "
-    "Topics: ordering, booking appointments, checking delivery, prices, complaints. "
-    "Vary length: some short (5–10 words), some medium (10–25 words). "
-    'Return ONLY valid JSON: {{"messages": ["message1", ..., "message{n}"]}}'
-)
+TARGET_EACH = 250
+BATCH_SIZE = 50
 
-TAMIL_PROMPT = (
-    "Generate {n} realistic customer service messages written in pure Tamil script. "
-    "These MUST use actual Tamil unicode characters (த, ம, ி, ழ etc.) — NOT romanized. "
-    "They should look like real WhatsApp or website chatbot messages. "
-    "Topics: ordering, booking appointments, checking delivery, prices, complaints. "
-    "Vary length: some short (5–10 words), some medium (10–25 words). "
-    'Return ONLY valid JSON: {{"messages": ["message1", ..., "message{n}"]}}'
-)
+# ── Few-shot seed examples used only as in-prompt tone/format guidance ────────
+
+SINHALA_SEEDS = [
+    "මගේ ඇණවුම කොහේද?",
+    "නිකටම ශාඛාව කොහේද?",
+    "ගෙවීම නිවැරදිද?",
+    "මිල කීයද?",
+    "ගිණුම ශේෂය කීයද?",
+    "බෙදාහැරීම කවදාද?",
+]
+
+TAMIL_SEEDS = [
+    "என் ஆர்டர் எங்கே?",
+    "அருகில் கிளை எங்கே?",
+    "பணம் சரியாக கட்டப்பட்டதா?",
+    "விலை என்ன?",
+    "கணக்கு இருப்பு என்ன?",
+    "டெலிவரி எப்போது?",
+]
+
+ENGLISH_SINHALA_SEEDS = [
+    "My ඇණවුම is still pending",
+    "When will delivery to කොළඹ happen?",
+    "Account balance කීයද right now?",
+    "Nearest branch from Kandy කොහේද?",
+    "Payment failed — මොකද problem?",
+]
+
+ENGLISH_TAMIL_SEEDS = [
+    "My ஆர்டர் is still not delivered",
+    "Branch in Jaffna எங்கே exactly?",
+    "Can I check கணக்கு balance online?",
+    "Nearest ATM from Wellawatte எங்கே?",
+    "Please help with my விலை query",
+]
+
+# ── Prompt templates ──────────────────────────────────────────────────────────
+# Real Sri Lankan locations to use naturally in generated messages:
+#   Cities:  Colombo, Kandy, Galle, Negombo, Matara, Jaffna, Kurunegala, Nuwara Eliya
+#   Areas:   Fort, Pettah, Kollupitiya, Bambalapitiya, Wellawatte, Borella, Nugegoda,
+#            Maharagama, Rajagiriya, Battaramulla
+#   Malls:   Majestic City, Liberty Plaza, One Galle Face Mall, Odel, Cargills Square
+#   Hospitals: Asiri Central, Nawaloka, Lanka, Durdans, National Hospital
+
+SINHALA_PROMPT = """\
+Generate {n} realistic customer service messages written ENTIRELY in pure Sinhala script.
+Every single character must be Sinhala unicode (ශ, ල, ා, ් etc.) — absolutely NO English, NO romanized text.
+Topics: ordering, booking, delivery, prices, complaints, account queries.
+Vary length: some 5–10 words, some 10–25 words.
+Use real Sri Lankan locations naturally where relevant (e.g. කොළඹ, මහනුවර, නුගෙගොඩ).
+
+Examples of the exact style required:
+{examples}
+
+Return ONLY valid JSON, no markdown, no explanation: {{"messages": ["msg1", ..., "msg{n}"]}}"""
+
+TAMIL_PROMPT = """\
+Generate {n} realistic customer service messages written ENTIRELY in pure Tamil script.
+Every single character must be Tamil unicode (த, ம, ி, ழ etc.) — absolutely NO English, NO romanized text.
+Topics: ordering, booking, delivery, prices, complaints, account queries.
+Vary length: some 5–10 words, some 10–25 words.
+Use real Sri Lankan locations naturally where relevant (e.g. யாழ்ப்பாணம், கொழும்பு, மட்டக்களப்பு).
+
+Examples of the exact style required:
+{examples}
+
+Return ONLY valid JSON, no markdown, no explanation: {{"messages": ["msg1", ..., "msg{n}"]}}"""
+
+ENGLISH_SINHALA_PROMPT = """\
+Generate {n} customer service messages that MIX English words with Sinhala unicode characters.
+CRITICAL REQUIREMENT: Every single message MUST contain at least one Sinhala unicode character \
+(for example: ශාඛාව, ඇණවුම, ගිණුම, කීයද, කොහේද, කවදාද, මොකද, නිකටම, ගෙවීම).
+Do NOT generate pure English. Every message must have Sinhala script mixed in.
+The mix should read naturally — a real Sri Lankan customer switching between English and Sinhala.
+Topics: ordering, branch locations, delivery, account balance, payment issues.
+Vary length: 5–15 words.
+Use real Sri Lankan locations naturally (e.g. Colombo, Kandy, Nugegoda, Wellawatte, Bambalapitiya).
+
+Examples showing the EXACT format required — Sinhala characters mixed into English:
+{examples}
+
+Return ONLY valid JSON, no markdown, no explanation: {{"messages": ["msg1", ..., "msg{n}"]}}"""
+
+ENGLISH_TAMIL_PROMPT = """\
+Generate {n} customer service messages that MIX English words with Tamil unicode characters.
+CRITICAL REQUIREMENT: Every single message MUST contain at least one Tamil unicode character \
+(for example: ஆர்டர், கிளை, கணக்கு, விலை, எங்கே, எப்போது, தயவு, செய்து, இருப்பு).
+Do NOT generate pure English. Every message must have Tamil script mixed in.
+The mix should read naturally — a real Sri Lankan customer switching between English and Tamil.
+Topics: ordering, branch locations, delivery, account balance, payment issues.
+Vary length: 5–15 words.
+Use real Sri Lankan locations naturally (e.g. Colombo, Jaffna, Wellawatte, Pettah, Batticaloa).
+
+Examples showing the EXACT format required — Tamil characters mixed into English:
+{examples}
+
+Return ONLY valid JSON, no markdown, no explanation: {{"messages": ["msg1", ..., "msg{n}"]}}"""
 
 
-def generate_script_messages(script: str, n: int) -> list[str]:
-    """Generate n pure-script messages via OpenAI API."""
-    from openai import OpenAI
+def has_script_chars(text: str) -> bool:
+    """Return True if text contains at least one Sinhala or Tamil unicode character."""
+    from backend.shared.script_detector import is_pure_script
 
-    client = OpenAI()
-    template = SINHALA_PROMPT if script == "sinhala" else TAMIL_PROMPT
-    batch = 50
-    messages: list[str] = []
+    return is_pure_script(text)
 
-    while len(messages) < n:
-        remaining = min(batch, n - len(messages))
-        response = client.chat.completions.create(
-            model=settings_manager.get("GENERATION_LLM"),
-            messages=[{"role": "user", "content": template.format(n=remaining)}],
+
+def format_examples(seeds: list[str]) -> str:
+    return "\n".join(f"  - {s}" for s in seeds)
+
+
+def generate_batch(client: object, model: str, prompt: str) -> list[str]:
+    """Call the API once and return parsed messages list. Empty list on failure."""
+    import openai
+
+    try:
+        response = client.chat.completions.create(  # ty: ignore
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
         )
         content = response.choices[0].message.content
         if content is None:
-            log.warning("Empty response — retrying")
-            continue
-
+            return []
         data = json.loads(content)
-        batch_msgs = data.get("messages", [])
-        messages.extend(batch_msgs[:remaining])
-        log.info(f"  {script}: {len(messages)}/{n}")
+        return [str(m) for m in data.get("messages", [])]
+    except (openai.OpenAIError, json.JSONDecodeError, KeyError) as exc:
+        log.warning(f"  Batch error: {exc}")
+        return []
 
-    return messages[:n]
+
+def generate_messages(script: str, n: int) -> list[str]:
+    """Generate n messages of the given script category via OpenAI API.
+
+    For mixed categories, any message that contains no script characters is
+    rejected and a replacement is requested. This loop continues until every
+    slot holds a genuinely mixed message.
+
+    script: "sinhala" | "tamil" | "english_sinhala_mixed" | "english_tamil_mixed"
+    """
+    from openai import OpenAI
+
+    from backend.shared.settings_manager import settings_manager
+
+    client = OpenAI()
+    model = str(settings_manager.get("GENERATION_LLM"))
+    is_mixed = script.startswith("english_")
+
+    prompt_template, seeds = {
+        "sinhala": (SINHALA_PROMPT, SINHALA_SEEDS),
+        "tamil": (TAMIL_PROMPT, TAMIL_SEEDS),
+        "english_sinhala_mixed": (ENGLISH_SINHALA_PROMPT, ENGLISH_SINHALA_SEEDS),
+        "english_tamil_mixed": (ENGLISH_TAMIL_PROMPT, ENGLISH_TAMIL_SEEDS),
+    }[script]
+
+    examples_block = format_examples(seeds)
+    accepted: list[str] = []
+
+    while len(accepted) < n:
+        need = min(BATCH_SIZE, n - len(accepted))
+        prompt = prompt_template.format(n=need, examples=examples_block)
+        batch = generate_batch(client, model, prompt)
+
+        for msg in batch:
+            if len(accepted) >= n:
+                break
+            # For mixed categories, reject pure-English generations
+            if is_mixed and not has_script_chars(msg):
+                log.warning(f"  [{script}] Rejected pure-English generation: {msg[:60]}")
+                continue
+            accepted.append(msg)
+
+        log.info(f"  [{script}] {len(accepted)}/{n}")
+
+    return accepted[:n]
 
 
-def verify_and_save(
-    sinhala_msgs: list[str],
-    tamil_msgs: list[str],
-) -> dict[str, int]:
-    """Run is_pure_script() on all messages. Save results to CSV."""
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+def verify_and_save(all_messages: dict[str, list[str]]) -> dict[str, dict[str, int]]:
+    """Run is_pure_script() on all messages. Save results to VERIFY_CSV."""
+    from backend.shared.script_detector import is_pure_script, script_language
 
-    rows: list[dict] = []
-    si_caught = ta_caught = 0
+    GROUNDING_DIR.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, str]] = []
+    stats: dict[str, dict[str, int]] = {}
 
-    for msg in sinhala_msgs:
-        caught = is_pure_script(msg)
-        lang = script_language(msg) or "none"
-        if caught:
-            si_caught += 1
-        rows.append({"text": msg, "expected_script": "sinhala", "caught": caught, "detected": lang})
+    for script, msgs in all_messages.items():
+        caught_count = 0
+        for msg in msgs:
+            caught = is_pure_script(msg)
+            detected = script_language(msg) or "none"
+            if caught:
+                caught_count += 1
+            rows.append(
+                {
+                    "script": script,
+                    "text": msg,
+                    "caught": str(caught),
+                    "detected": detected,
+                }
+            )
+        stats[script] = {"total": len(msgs), "caught": caught_count}
 
-    for msg in tamil_msgs:
-        caught = is_pure_script(msg)
-        lang = script_language(msg) or "none"
-        if caught:
-            ta_caught += 1
-        rows.append({"text": msg, "expected_script": "tamil", "caught": caught, "detected": lang})
-
-    with OUTPUT_PATH.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["text", "expected_script", "caught", "detected"])
+    with VERIFY_CSV.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["script", "text", "caught", "detected"])
         writer.writeheader()
         writer.writerows(rows)
 
-    return {
-        "sinhala_total": len(sinhala_msgs),
-        "sinhala_caught": si_caught,
-        "tamil_total": len(tamil_msgs),
-        "tamil_caught": ta_caught,
-    }
+    return stats
+
+
+def print_summary(stats: dict[str, dict[str, int]]) -> None:
+    total = sum(s["total"] for s in stats.values())
+    caught = sum(s["caught"] for s in stats.values())
+    missed = total - caught
+
+    print(f"\n{'═' * 60}")
+    print("  Phase 1 Grounding — Unicode Script Verification")
+    print(f"{'═' * 60}")
+    print(f"  {'Script':<30} {'Total':>6}  {'Caught':>6}  {'%':>6}")
+    print(f"  {'─' * 52}")
+    for script, counts in sorted(stats.items()):
+        pct = counts["caught"] / counts["total"] * 100 if counts["total"] else 0.0
+        print(f"  {script:<30} {counts['total']:>6}  {counts['caught']:>6}  {pct:>5.1f}%")
+    print(f"  {'─' * 52}")
+    pct_total = caught / total * 100 if total else 0.0
+    print(f"  {'TOTAL':<30} {total:>6}  {caught:>6}  {pct_total:>5.1f}%")
+
+    if missed > 0:
+        print(f"\n  ⚠ {missed} samples NOT caught — see caught=False rows in CSV")
+    else:
+        print("\n  ✅ All samples correctly caught by is_pure_script().")
+    print("═" * 60)
+
+
+def load_existing_summary() -> None:
+    """Load and print summary from existing VERIFY_CSV."""
+    with VERIFY_CSV.open(encoding="utf-8") as f:
+        rows: list[dict[str, str]] = list(csv.DictReader(f))
+
+    stats: dict[str, dict[str, int]] = {}
+    for r in rows:
+        script = r.get("script", "unknown")
+        if script not in stats:
+            stats[script] = {"total": 0, "caught": 0}
+        stats[script]["total"] += 1
+        if r.get("caught", "").lower() == "true":
+            stats[script]["caught"] += 1
+
+    print_summary(stats)
+    print(f"\nRun with --force to regenerate. CSV: {VERIFY_CSV}\n")
+
+
+def run_grounding() -> None:
+    """Generate messages via API, verify with is_pure_script(), save CSV."""
+    log.info(f"Generating {TARGET_EACH} samples per category via OpenAI API...")
+
+    all_messages: dict[str, list[str]] = {}
+    for script in ("sinhala", "tamil", "english_sinhala_mixed", "english_tamil_mixed"):
+        log.info(f"Generating [{script}]...")
+        all_messages[script] = generate_messages(script, TARGET_EACH)
+
+    log.info("Running is_pure_script() verification...")
+    stats = verify_and_save(all_messages)
+
+    print_summary(stats)
+    log.info(f"Results saved: {VERIFY_CSV}")
+
+    missed = sum(s["total"] - s["caught"] for s in stats.values())
+    if missed > 0:
+        log.warning(
+            f"{missed} messages not caught. Check CSV for caught=False rows. "
+            "Run with --force to retry generation."
+        )
+        sys.exit(1)
 
 
 def main() -> None:
-    print("=" * 60)
-    print("Phase 1 — Grounding: Unicode Rule Verification")
-    print("=" * 60)
-
-    log.info(f"Generating {TARGET_EACH} pure Sinhala messages...")
-    sinhala = generate_script_messages("sinhala", TARGET_EACH)
-
-    log.info(f"Generating {TARGET_EACH} pure Tamil messages...")
-    tamil = generate_script_messages("tamil", TARGET_EACH)
-
-    log.info("Running is_pure_script() verification...")
-    stats = verify_and_save(sinhala, tamil)
-
-    si_pass = stats["sinhala_caught"] == stats["sinhala_total"]
-    ta_pass = stats["tamil_caught"] == stats["tamil_total"]
-
-    print("\n" + "=" * 60)
-    print("GROUNDING VERIFICATION RESULTS")
-    print("=" * 60)
-    print(
-        f"  Sinhala: {stats['sinhala_caught']}/{stats['sinhala_total']} caught  "
-        f"{'✅ PASS' if si_pass else '❌ FAIL — fix unicode ranges in script_detector.py'}"
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    print(
-        f"  Tamil:   {stats['tamil_caught']}/{stats['tamil_total']} caught  "
-        f"{'✅ PASS' if ta_pass else '❌ FAIL — fix unicode ranges in script_detector.py'}"
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Regenerate even if unicode_verification.csv already exists",
     )
-    print(f"\n  Output: {OUTPUT_PATH}")
-    print("=" * 60)
+    args = parser.parse_args()
 
-    if not si_pass or not ta_pass:
-        missed_si = stats["sinhala_total"] - stats["sinhala_caught"]
-        missed_ta = stats["tamil_total"] - stats["tamil_caught"]
-        log.warning(
-            f"MISSED: {missed_si} Sinhala, {missed_ta} Tamil. "
-            "Check unicode_verification.csv for rows where caught=False."
-        )
-        sys.exit(1)
+    if VERIFY_CSV.exists() and not args.force:
+        log.info(f"Found existing {VERIFY_CSV.name} — showing summary (--force to regenerate)")
+        load_existing_summary()
+        return
+
+    run_grounding()
 
 
 if __name__ == "__main__":

@@ -6,7 +6,8 @@ Generation and split have their own phase files:
     python phases/phase_2_generate.py    ← main generation
     python phases/phase_3_split.py       ← split into train/val/test
 
-This file is for interactive development and testing:
+Commands:
+    python cli.py clean --dataset v1                  # delete ALL training outputs
     python cli.py distribution
     python cli.py preview  --language singlish_light --industry banking --scenario continuation
     python cli.py dryrun   --language singlish_light --industry banking --scenario continuation --n 5
@@ -29,6 +30,62 @@ load_dotenv(Path(__file__).parent / ".env")
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from backend.config.keys import IndustryKey, LanguageKey, ScenarioKey
+
+PROJECT_ROOT = Path(__file__).parent
+
+
+def cmd_clean(args: argparse.Namespace) -> None:
+    """Delete all training outputs for a dataset.
+
+    Removes:
+      experiments/{dataset}/classical/      — models, HPO params, result JSONs
+      experiments/{dataset}/transformers/   — fine-tuned models, result JSONs
+      experiments/{dataset}/router/         — threshold_curve.json
+      experiments/{dataset}/master_comparison.csv
+      experiments/{dataset}/cost_simulation.json
+      experiments/{dataset}/error_analysis.json
+      mlruns/                               — MLflow artifact store
+      mlflow.db                             — MLflow SQLite backend
+      catboost_info/                        — CatBoost training logs (written to cwd)
+    """
+    import shutil
+
+    dataset = args.dataset
+    exp_root = PROJECT_ROOT / "experiments" / dataset
+
+    targets: list[Path] = [
+        exp_root / "classical",
+        exp_root / "transformers",
+        exp_root / "router",
+        exp_root / "master_comparison.csv",
+        exp_root / "cost_simulation.json",
+        exp_root / "error_analysis.json",
+        PROJECT_ROOT / "mlruns",
+        PROJECT_ROOT / "mlflow.db",
+        PROJECT_ROOT / "catboost_info",
+    ]
+
+    print(f"\n{'═' * 60}")
+    print(f"  Cleaning all training outputs for dataset '{dataset}'")
+    print(f"{'═' * 60}")
+
+    any_deleted = False
+    for target in targets:
+        if not target.exists():
+            print(f"  skip  {target.relative_to(PROJECT_ROOT)}")
+            continue
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        print(f"  ✅ deleted  {target.relative_to(PROJECT_ROOT)}")
+        any_deleted = True
+
+    if any_deleted:
+        print("\n  Clean complete. Re-run training phases to retrain.")
+    else:
+        print("\n  Nothing to delete — already clean.")
+    print("═" * 60)
 
 
 def cmd_preview(args: argparse.Namespace) -> None:
@@ -186,6 +243,9 @@ def main() -> None:
         p.add_argument("--industry", required=True, choices=list(IndustryKey))
         p.add_argument("--scenario", required=True, choices=list(ScenarioKey))
 
+    p = sub.add_parser("clean", help="Delete all training outputs for a dataset")
+    p.add_argument("--dataset", default="v1", help="Dataset version to clean (default: v1)")
+
     p = sub.add_parser("preview", help="Print system prompt (no API call)")
     cell_args(p)
 
@@ -204,6 +264,7 @@ def main() -> None:
 
     args = parser.parse_args()
     {
+        "clean": cmd_clean,
         "preview": cmd_preview,
         "dryrun": cmd_dryrun,
         "examples": cmd_examples,

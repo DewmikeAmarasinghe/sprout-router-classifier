@@ -69,6 +69,7 @@ class ErrorAnalyzer:
 
         predictions = [predictor.predict(t) for t in texts]
         val_df["predicted"] = [p.label for p in predictions]
+        val_df["confidence"] = [round(p.confidence, 4) for p in predictions]
 
         false_negatives = val_df[(val_df["label"] == 1) & (val_df["predicted"] == 0)].copy()
 
@@ -87,7 +88,9 @@ class ErrorAnalyzer:
         worst_language = max(by_language, key=lambda k: by_language[k]["rate"], default="")
 
         sample_errors = (
-            false_negatives[["text", "language", "scenario"]].head(max_samples).to_dict("records")
+            false_negatives[["text", "language", "scenario", "label", "predicted", "confidence"]]
+            .head(max_samples)
+            .to_dict("records")
         )
 
         report = ErrorReport(

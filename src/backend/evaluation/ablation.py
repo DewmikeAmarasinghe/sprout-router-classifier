@@ -31,6 +31,7 @@ from backend.router.predictor import RouterPredictor
 from backend.shared.metrics import compute_all_metrics
 from backend.shared.path_resolver import get_dataset_path
 from backend.shared.script_detector import is_pure_script
+from backend.shared.settings_manager import settings_manager
 
 log = logging.getLogger(__name__)
 
@@ -170,7 +171,11 @@ def print_summary(results: list[AblationResult]) -> None:
     print(f"  {'Config':<35} {'recall_1':>8} {'prec_1':>7} {'MCC':>7} {'pass':>5}")
     print("─" * 80)
     for r in results:
-        flag = "✅" if r.recall_1 >= 0.97 else "❌"
+        flag = (
+            "✅"
+            if r.recall_1 >= float(settings_manager.get("PRODUCTION_RECALL_THRESHOLD"))
+            else "❌"
+        )
         print(
             f"  {r.config_name:<35} "
             f"{r.recall_1:>8.4f} "

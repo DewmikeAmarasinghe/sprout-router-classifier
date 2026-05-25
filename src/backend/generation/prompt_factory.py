@@ -31,14 +31,37 @@ PLATFORM_STYLES = [
 ]
 
 CONTEXT_HEADER = """\
-You are generating synthetic training data for Sprout — an AI-powered customer service chatbot platform built by hSenid Mobile (Sri Lanka).
+You are generating synthetic training data for Sprout — an AI-powered customer service chatbot \
+platform built by hSenid Mobile (Sri Lanka).
 
-Sprout serves: ecommerce/fashion, healthcare (clinics, optical, dental), banking, insurance, telecom, logistics, hospitality, and education.
-Deployed on: WhatsApp Business, Instagram DMs, Facebook Messenger, Viber, website chat widgets, and mobile app chats.
+Sprout serves: ecommerce/fashion, healthcare (clinics, optical, dental), banking, insurance, \
+telecom, logistics, hospitality, and education.
+Deployed on: WhatsApp Business, Instagram DMs, Facebook Messenger, Viber, website chat widgets, \
+and mobile app chats.
+
+YOUR TASK:
+  Generate realistic messages that Sri Lankan customers would ACTUALLY type to a business chatbot.
+  Focus on the most probable, high-frequency queries for this specific language × industry × scenario.
+  Each batch must cover DIFFERENT situations — avoid repeating similar queries.
 
 Binary router labels:
   label=0 → gpt-4o-mini  (pure English, simple, no complexity signals)
   label=1 → gpt-4o       (Unicode mixed, complex, sensitive, needs spatial/emotional reasoning)\
+"""
+
+# Real Sri Lankan locations injected for location-heavy scenarios.
+SRI_LANKAN_LOCATIONS = """\
+── SRI LANKAN LOCATIONS ──
+  Always use real Sri Lankan place names — never invent fictional ones.
+  Here are examples to get you started; you may use any real location you know, not only these:
+  Cities:        Colombo, Kandy, Galle, Negombo, Matara, Jaffna, Kurunegala,
+                 Nuwara Eliya, Batticaloa, Trincomalee, Anuradhapura, Ratnapura
+  Colombo areas: Fort, Pettah, Kollupitiya, Bambalapitiya, Wellawatte, Dehiwala,
+                 Mount Lavinia, Borella, Nugegoda, Maharagama, Rajagiriya, Battaramulla
+  Malls/areas:   Majestic City, Liberty Plaza, One Galle Face Mall, Odel, Cargills Square,
+                 Unity Plaza, House of Fashion, Colombo City Centre
+  Hospitals:     Asiri Central, Nawaloka, Lanka, Durdans, National Hospital
+  ❌ Never invent fictional places: "City Park", "Cross Street", "River Bridge", "Grand Mosque junction"\
 """
 
 SCENARIOS_WITH_SUBTYPES: frozenset[ScenarioKey] = frozenset({ScenarioKey.CONTINUATION})
@@ -108,6 +131,15 @@ def assemble_prompt(
         sections.append(build_examples_section(language, industry, scenario, examples))
 
     sections.append(build_anti_scenarios_section(sc_cfg))
+
+    # Add location guidance for location-specific scenarios
+    if scenario in (
+        ScenarioKey.NAMED_LOCATION,
+        ScenarioKey.LOCATION_PROXIMITY,
+        ScenarioKey.LOCATION_RELATIVE,
+    ):
+        sections.append(SRI_LANKAN_LOCATIONS)
+
     sections.append(build_output_rules(language, industry, scenario, platform_style))
 
     return "\n\n".join(sections)
@@ -132,18 +164,13 @@ def build_industry_section(industry: IndustryKey) -> str:
         "── INDUSTRY ──\n"
         f"  {ind_cfg.display_name}: {ind_cfg.description}\n"
         f"  Domain terms:   {', '.join(ind_cfg.product_examples[:8])}\n"
-        f"  Location types: {', '.join(ind_cfg.location_types)}"
+        f"  Location types: {', '.join(ind_cfg.location_types)}\n"
+        f"  Platform:       {ind_cfg.typical_platform}"
     )
 
 
 def build_language_section(language: LanguageKey) -> str:
-    """Inject the full language instruction from LanguageConfig.instruction.
-
-    Previously broken: used getattr(lang_cfg, 'description', '') which returned ''
-    since LanguageConfig has no description field — the correct field is instruction.
-    This meant singlish_light's '1-3 romanized words' and singlish_heavy's
-    '60-80% Sinhala' guidance were completely absent from all generated prompts.
-    """
+    """Inject the full language instruction from LanguageConfig.instruction."""
     lang_cfg = LANGUAGE_CONFIGS[language]
     lines = [
         "── LANGUAGE MANDATE ──",
@@ -171,9 +198,7 @@ def build_language_section(language: LanguageKey) -> str:
 def build_scenario_section(sc_cfg: ScenarioConfig, label_str: str) -> str:
     """Inject scenario display name, description, label, and routing_reason from ScenarioConfig.
 
-    routing_reason is used verbatim from the config — no language-specific overrides.
-    The routing_reason for SIMPLE_TRANSACTIONAL already covers both cases:
-    pure English (first sentence) and Unicode mixed (second sentence).
+    routing_reason is used verbatim — no language-specific overrides.
     """
     return (
         f"── TASK: {sc_cfg.display_name} ──\n"
@@ -202,7 +227,9 @@ def build_continuation_subtype(language: LanguageKey) -> str:
     """Build continuation sub-type section using clarification_examples from LanguageConfig.
 
     Reads from LANGUAGE_CONFIGS[language].clarification_examples — no hardcoded dict.
-    Values are plain strings; formatted with quotes here for the prompt.
+
+    CRITICAL: Sub-type A = PREVIOUS SERVICE ACTION failed (payment, order, upgrade, booking).
+    Never "The bot failed" or "Your chat froze" — the SERVICE failed, not the chatbot.
     """
     lang_cfg = LANGUAGE_CONFIGS[language]
     clarif = [f'"{ex}"' for ex in lang_cfg.clarification_examples[:4]]
@@ -210,9 +237,10 @@ def build_continuation_subtype(language: LanguageKey) -> str:
     lang_label = language.replace("_", " ")
     return (
         "── SUB-TYPE MIX ──\n"
-        "  ~55% type A — PREVIOUS ACTION FAILED:\n"
-        "    User reports that a previous chatbot action failed or keeps failing.\n"
-        '    e.g. "still shows error", "tried again same problem", "keeps failing"\n\n'
+        "  ~55% type A — PREVIOUS SERVICE ACTION FAILED:\n"
+        "    A service action (payment, booking, order, upgrade) failed — user follows up.\n"
+        '    e.g. "still shows error", "tried again same problem", "payment keeps failing"\n'
+        "    ❌ NEVER: 'The bot failed', 'Your chat froze', 'The AI is broken'\n\n"
         f"  ~45% type B — UNCLEAR INTENT / CLARIFICATION ({lang_label}):\n"
         f"    Very short unclear message or asking to re-explain — in {lang_label}.\n"
         f'    e.g. {clarif_str}, "I didn\'t get that", "can you explain again?"'
@@ -255,26 +283,54 @@ def build_output_rules(
     scenario: ScenarioKey,
     platform: str,
 ) -> str:
-    """Build output rules section. All label text comes from config lookups."""
+    """Build output rules. All display text comes from config lookups.
+
+    RULE 2 deliberately does NOT ban instruction words — customers DO instruct
+    chatbots ("cancel my order", "send me the details", "check my balance").
+    The issue is REPETITION: every message starting with the same word is unnatural.
+    Rule 2 targets monotony, not instruction vocabulary.
+    """
     lang_display = LANGUAGE_CONFIGS[language].display_name
     ind_display = INDUSTRY_CONFIGS[industry].display_name
     sc_display = SCENARIO_CONFIGS[scenario].display_name
 
     return (
-        "── OUTPUT RULES ──\n"
-        f"  Write ACTUAL customer messages as typed in {platform}.\n\n"
-        f"  1. Each 'text' must be a probable message a real customer would send to a\n"
-        f"     Sprout chatbot ({lang_display} × {ind_display} × {sc_display}).\n"
-        f"     NOT a meta-instruction asking to generate something. NOT a description.\n"
-        f'     WRONG: "Generate a short message asking about order status."\n'
-        f'     WRONG: "A customer asking about their delivery."\n'
-        f"     CORRECT: \"My order hasn't arrived, it's been 3 days.\"\n\n"
-        "  2. Use everyday vocabulary real customers use in chat. Avoid formal language.\n"
-        '     WRONG: "The checkout flow exhibits persistent failures requiring escalation."\n'
-        '     CORRECT: "It keeps failing when I try to pay."\n\n'
-        "  3. Vary specifics — mention products, actions, places, times.\n"
-        '     e.g. "blue dress", "promo code SAVE20", "saree in XL", "Colombo"\n\n'
-        "  4. Occasional realistic typos (1–2 per batch).\n"
-        '     e.g. "stil shows error", "chekcout not wrking"\n\n'
+        "── OUTPUT RULES (read carefully before generating) ──\n\n"
+        "Before generating each message, think:\n"
+        "  - Would a real Sri Lankan customer actually type this to this business?\n"
+        "  - Is this different from what I already generated this session?\n"
+        "  - Does this follow every rule below?\n\n"
+        f"Each 'text' must be a probable message a real customer sends to a Sprout\n"
+        f"chatbot ({lang_display} × {ind_display} × {sc_display}).\n\n"
+        "ABSOLUTE RULES:\n\n"
+        "  RULE 1: Output the raw message text ONLY. No prefix, label, number, or annotation.\n"
+        '    ❌ "label=1 Nearest campus?"        ← label prefix\n'
+        '    ❌ "Seed 3: 1-6 words:"             ← seed prefix\n'
+        '    ❌ "Escalation 14: Not happy"        ← escalation prefix\n'
+        '    ❌ "Generate a message about..."     ← meta-instruction\n'
+        '    ❌ "A customer asking about..."      ← description, not message\n'
+        "    ✅ \"My order hasn't arrived, it's been 3 days.\"\n\n"
+        "  RULE 2: Vary how messages begin — do NOT start every message with the same word.\n"
+        "    Real customers open messages many different ways. Mix:\n"
+        '    • Questions:   "Can I track my parcel?", "Is COD available?"\n'
+        '    • Commands:    "Cancel my order", "Send me the receipt"\n'
+        '    • Statements:  "My payment failed again", "Still no update"\n'
+        '    • Greetings:   "Hi, I need help with...", "Good morning"\n'
+        '    • Short bursts: "Status?", "Price?", "hi", "ok"\n'
+        '    ❌ All 50 messages starting with "Enna," or "I want" or "Hi,"\n\n'
+        "  RULE 3: Continuation = mid-conversation follow-up. NOT a bot/AI complaint.\n"
+        '    ❌ "The bot failed again."  ❌ "Your chat froze."  ❌ "AI broke."\n'
+        '    ✅ "Payment keeps failing."  ✅ "Tried again, same error."\n\n'
+        "  RULE 4: Use real Sri Lankan place names only — never invent fictional locations.\n"
+        "    You may use any real place in Sri Lanka, not just the examples listed above.\n"
+        '    ❌ "City Park", "Cross Street", "River Bridge"  (fictional — never use)\n'
+        '    ✅ "Majestic City branch?", "Near Kandy City Centre?", or any real place\n\n'
+        "  RULE 5: Vary reference IDs — never repeat the same format pattern:\n"
+        "    ❌ SH7777, SH8888, SH9999\n"
+        "    ✅ SH-1234, TRK-001, #45678, P-209, REF/2024/001, ORD-5K\n\n"
+        "  RULE 6: Write casual chat language, not formal prose.\n"
+        '    ❌ "The checkout process exhibits persistent failure requiring escalation."\n'
+        '    ✅ "It keeps failing when I try to pay."\n\n'
+        '  Occasional typos are fine (1–2 per batch): e.g. "stil shows error"\n\n'
         f'Return ONLY this JSON: {{"prompts": [{{"text": "..."}}]}}'
     )

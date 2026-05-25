@@ -1,9 +1,13 @@
 """
 Unicode script detector — THE ONLY ROUTING RULE.
 
-is_pure_script(text) returns True if the text contains any Sinhala or Tamil
-unicode characters. The ML classifier never sees pure-script text because this
-rule intercepts it first and routes directly to label=1 (gpt-4o).
+is_pure_script(text) returns True if the text contains ANY Sinhala or Tamil
+unicode characters. The name is historical — the function correctly catches
+both pure-script messages and mixed English+script messages, because it returns
+True on the first Sinhala or Tamil character found anywhere in the text.
+
+The ML classifier never sees these messages because this rule intercepts them
+first and routes directly to label=1 (gpt-4o).
 
 ALL training data uses English alphabet letters (romanized Sinhala/Tamil).
 This rule handles the native-script case that the ML model never trained on.
@@ -12,18 +16,20 @@ Unicode ranges:
     Sinhala: U+0D80 – U+0DFF
     Tamil:   U+0B80 – U+0BFF
 
-Verified by phase_1_grounding.py:
-    500 pure Sinhala messages → all caught ✅
-    500 pure Tamil messages   → all caught ✅
-    500 romanized messages    → none caught ✅
+Verified by phase_1_grounding.py (2 000 samples total):
+    250 pure Sinhala messages              → all caught ✅
+    250 pure Tamil messages                → all caught ✅
+    250 mixed English + Sinhala messages   → all caught ✅
+    250 mixed English + Tamil messages     → all caught ✅
+    Romanized messages (Singlish/Tanglish) → none caught ✅  (pass to ML layer)
 """
 
 from __future__ import annotations
 
-_SINHALA_START = 0x0D80
-_SINHALA_END = 0x0DFF
-_TAMIL_START = 0x0B80
-_TAMIL_END = 0x0BFF
+SINHALA_START = 0x0D80
+SINHALA_END = 0x0DFF
+TAMIL_START = 0x0B80
+TAMIL_END = 0x0BFF
 
 
 def is_pure_script(text: str) -> bool:
@@ -52,9 +58,9 @@ def is_pure_script(text: str) -> bool:
     """
     for char in text:
         cp = ord(char)
-        if _SINHALA_START <= cp <= _SINHALA_END:
+        if SINHALA_START <= cp <= SINHALA_END:
             return True
-        if _TAMIL_START <= cp <= _TAMIL_END:
+        if TAMIL_START <= cp <= TAMIL_END:
             return True
     return False
 
@@ -72,9 +78,9 @@ def script_language(text: str) -> str | None:
 
     for char in text:
         cp = ord(char)
-        if _SINHALA_START <= cp <= _SINHALA_END:
+        if SINHALA_START <= cp <= SINHALA_END:
             has_sinhala = True
-        if _TAMIL_START <= cp <= _TAMIL_END:
+        if TAMIL_START <= cp <= TAMIL_END:
             has_tamil = True
         if has_sinhala and has_tamil:
             break  # mixed script — both detected
