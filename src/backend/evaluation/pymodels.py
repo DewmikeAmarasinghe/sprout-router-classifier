@@ -19,18 +19,14 @@ class ComparisonRow(BaseModel):
     notes: str = ""
 
     # All metrics — kept in sync with MetricsResult via from_experiment().
-    accuracy: float = 0.0
-    precision_0: float = 0.0
+    recall_1: float = 0.0
     precision_1: float = 0.0
     recall_0: float = 0.0
-    recall_1: float = 0.0
+    precision_0: float = 0.0
     f1_macro: float = 0.0
-    f1_weighted: float = 0.0
     mcc: float = 0.0
     roc_auc: float = 0.0
-    pr_auc: float = 0.0
     log_loss: float = 0.0
-    ece: float = 0.0
     latency_mean_ms: float = 0.0
     latency_p50_ms: float = 0.0
     latency_p95_ms: float = 0.0
@@ -81,7 +77,6 @@ class AblationResult(BaseModel):
     recall_1: float
     precision_1: float
     mcc: float
-    accuracy: float
     latency_p50_ms: float
     cost_per_day_usd: float
     notes: str = ""

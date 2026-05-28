@@ -14,10 +14,7 @@ import time
 from typing import Any
 
 import numpy as np
-from sklearn.calibration import calibration_curve
 from sklearn.metrics import (
-    accuracy_score,
-    average_precision_score,
     f1_score,
     log_loss,
     matthews_corrcoef,
@@ -34,43 +31,39 @@ def compute_all_metrics(
     y_pred: list[int],
     y_proba: list[float] | None = None,
 ) -> dict[str, float]:
-    """Compute all evaluation metrics for a binary classifier.
+    """Compute core evaluation metrics for a binary classifier.
 
     Args:
         y_true: Ground truth labels (0 or 1).
         y_pred: Predicted labels (0 or 1).
         y_proba: Predicted probabilities for label=1 (optional).
-                 Required for ROC-AUC, PR-AUC, log loss, ECE.
+                 Required for ROC-AUC and log_loss.
 
     Returns:
-        Dict of metric_name → float value.
+        Dict of metric_name → float value (matches MetricsResult field names).
 
-    Key metrics to watch:
-        recall_1        ← MUST be >= PRODUCTION_RECALL_THRESHOLD in production
-        precision_1     ← want this high to avoid unnecessary gpt-4o routing
-        mcc             ← summary statistic: 1.0 = perfect, 0.0 = random
-        roc_auc         ← discrimination ability (requires y_proba)
+    Key metrics:
+        recall_1    ← MUST be >= PRODUCTION_RECALL_THRESHOLD in production
+        precision_1 ← want high to avoid unnecessary gpt-4o routing
+        mcc         ← 1.0 = perfect, 0.0 = random
+        roc_auc     ← discrimination ability (requires y_proba)
     """
     y_true_arr = np.array(y_true)
     y_pred_arr = np.array(y_pred)
 
     metrics: dict[str, float] = {
-        "accuracy": float(accuracy_score(y_true_arr, y_pred_arr)),
-        "precision_0": float(precision_score(y_true_arr, y_pred_arr, pos_label=0, zero_division=0)),
+        "recall_1": float(recall_score(y_true_arr, y_pred_arr, pos_label=1, zero_division=0)),
         "precision_1": float(precision_score(y_true_arr, y_pred_arr, pos_label=1, zero_division=0)),
         "recall_0": float(recall_score(y_true_arr, y_pred_arr, pos_label=0, zero_division=0)),
-        "recall_1": float(recall_score(y_true_arr, y_pred_arr, pos_label=1, zero_division=0)),
+        "precision_0": float(precision_score(y_true_arr, y_pred_arr, pos_label=0, zero_division=0)),
         "f1_macro": float(f1_score(y_true_arr, y_pred_arr, average="macro", zero_division=0)),
-        "f1_weighted": float(f1_score(y_true_arr, y_pred_arr, average="weighted", zero_division=0)),
         "mcc": float(matthews_corrcoef(y_true_arr, y_pred_arr)),
     }
 
     if y_proba is not None:
         y_proba_arr = np.array(y_proba)
         metrics["roc_auc"] = float(roc_auc_score(y_true_arr, y_proba_arr))
-        metrics["pr_auc"] = float(average_precision_score(y_true_arr, y_proba_arr))
         metrics["log_loss"] = float(log_loss(y_true_arr, y_proba_arr))
-        metrics["ece"] = float(_compute_ece(y_true_arr, y_proba_arr))
 
     return metrics
 
@@ -161,7 +154,6 @@ def print_metrics_report(
         ("precision_1", "Precision (label=1)"),
         ("recall_0", "Recall (label=0)"),
         ("precision_0", "Precision (label=0)"),
-        ("accuracy", "Accuracy"),
         ("mcc", "MCC"),
         ("f1_macro", "F1 Macro"),
     ]
@@ -177,39 +169,13 @@ def print_metrics_report(
 
     optional = [
         ("roc_auc", "ROC-AUC"),
-        ("pr_auc", "PR-AUC"),
         ("log_loss", "Log Loss"),
-        ("ece", "ECE (calibration)"),
     ]
     for key, label in optional:
         if key in metrics:
             print(f"  {label:<35} {metrics[key]:.4f}")
 
     print(f"{'═' * 50}\n")
-
-
-# ── Internal helpers ──────────────────────────────────────────────────────────
-
-
-def _compute_ece(
-    y_true: np.ndarray,
-    y_proba: np.ndarray,
-    n_bins: int = 10,
-) -> float:
-    """Expected Calibration Error — how well predicted probabilities match reality."""
-    fraction_of_positives, mean_predicted = calibration_curve(
-        y_true, y_proba, n_bins=n_bins, strategy="uniform"
-    )
-    bin_sizes = np.histogram(y_proba, bins=n_bins, range=(0, 1))[0]
-    total = y_true.shape[0]
-    ece = float(
-        np.sum(
-            np.abs(fraction_of_positives - mean_predicted)
-            * bin_sizes[: len(fraction_of_positives)]
-            / total
-        )
-    )
-    return ece
 
 
 def time_inference(

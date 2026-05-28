@@ -2,14 +2,12 @@
 Phase 7 — Full Model Evaluation.
 
 Run after phase_5 (classical) and/or phase_6 (transformers).
-Error analysis runs automatically — no flag needed.
 
 Usage:
     python phases/phase_7_evaluate.py --dataset v1
     python phases/phase_7_evaluate.py --dataset v1 --json      # machine-readable JSON
     python phases/phase_7_evaluate.py --dataset v1 --json | head -100
     python phases/phase_7_evaluate.py --dataset v1 --ablate    # test.csv (ONCE, final eval)
-    python phases/phase_7_evaluate.py --dataset v1 --model tfidf_combined__svm
 """
 
 from __future__ import annotations
@@ -133,53 +131,6 @@ def run_cost_simulation(
     print("═" * 90)
 
 
-def run_error_analysis(dataset: str, model_key: str | None, as_json: bool = False) -> None:
-    """Runs automatically after comparison. Shows false negative breakdown."""
-    from backend.evaluation.comparator import ModelComparator
-    from backend.evaluation.error_analyzer import ErrorAnalyzer
-    from backend.router.predictor import RouterPredictor
-    from backend.shared.path_resolver import get_experiment_path
-
-    comparator = ModelComparator()
-    best = comparator.best_model(dataset)
-
-    if not best:
-        log.warning("No best model found — skipping error analysis.")
-        return
-
-    experiment_id = model_key or best.experiment_id
-    approach = best.approach
-
-    if approach == "classical":
-        model_path = get_experiment_path(dataset, "classical") / "models" / experiment_id
-        predictor = RouterPredictor.from_pkl(model_path)
-    else:
-        ckpt_dir = get_experiment_path(dataset, "transformers") / "models" / experiment_id
-        predictor = RouterPredictor.from_hf_checkpoint(ckpt_dir)
-
-    log.info(f"Error analysis: {experiment_id} on val.csv")
-    report = ErrorAnalyzer().analyze(dataset, predictor)
-
-    if as_json:
-        data: dict = vars(report)
-        print(json.dumps(data, indent=2, default=str))
-    else:
-        print("\n" + "═" * 90)
-        print(f"  ERROR ANALYSIS  (model: {experiment_id})")
-        print("═" * 90)
-        print(
-            f"  False negatives: {report.total_fn} / {report.total_examples} ({report.fn_rate:.1%})"
-        )
-        print(f"  Worst scenario:  {report.worst_scenario}")
-        print(f"  Worst language:  {report.worst_language}")
-        print("\n  Sample false negatives (true=gpt-4o → model sent to gpt-4o-mini):")
-        for err in report.sample_errors[:5]:
-            conf = err.get("confidence", 0.0)
-            print(f"    [{err['language']} / {err['scenario']}] {err['text']}")
-            print(f"      true=1 (gpt-4o) → predicted=0 (gpt-4o-mini)  conf={conf:.4f}")
-        print("═" * 90)
-
-
 def run_ablation(dataset: str) -> None:
     from backend.evaluation.ablation import AblationRunner
 
@@ -206,9 +157,6 @@ def main() -> None:
         help="Run ablation on test.csv (final eval only — use once)",
     )
     parser.add_argument(
-        "--model", default=None, help="Specific model for error analysis (default: best model)"
-    )
-    parser.add_argument(
         "--json", action="store_true", help="Print results as pretty JSON instead of tables"
     )
     args = parser.parse_args()
@@ -217,7 +165,6 @@ def main() -> None:
 
     if rows:
         run_cost_simulation(args.dataset, rows, args.daily_messages, as_json=args.json)
-        run_error_analysis(args.dataset, args.model, as_json=args.json)
 
     if args.ablate:
         run_ablation(args.dataset)

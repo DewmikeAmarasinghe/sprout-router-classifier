@@ -40,6 +40,7 @@ import numpy as np
 import pandas as pd
 from scipy.special import softmax
 
+from backend.evaluation.plots import plot_confusion_matrix, plot_roc_curve
 from backend.shared.metrics import compute_all_metrics
 from backend.shared.path_resolver import get_dataset_path, get_experiment_path
 from backend.shared.settings_manager import settings_manager
@@ -171,6 +172,11 @@ class TransformerTrainer:
             log.warning(
                 f"  recall_1 = {metrics.recall_1:.4f} < {float(settings_manager.get('PRODUCTION_RECALL_THRESHOLD'))} — not production-safe"
             )
+
+        plot_confusion_matrix(val_labels.tolist(), val_preds.tolist(), output_dir, title=model_key)
+        plot_roc_curve(
+            val_labels.tolist(), val_proba.tolist(), metrics.roc_auc, output_dir, title=model_key
+        )
 
         trainer.save_model(str(output_dir))
         tokenizer.save_pretrained(str(output_dir))
@@ -381,13 +387,10 @@ def log_to_mlflow(
                     "precision_1": metrics.precision_1,
                     "recall_0": metrics.recall_0,
                     "precision_0": metrics.precision_0,
+                    "f1_macro": metrics.f1_macro,
                     "mcc": metrics.mcc,
                     "roc_auc": metrics.roc_auc,
-                    "pr_auc": metrics.pr_auc,
-                    "f1_macro": metrics.f1_macro,
                     "log_loss": metrics.log_loss,
-                    "ece": metrics.ece,
-                    "accuracy": metrics.accuracy,
                     "latency_p50_ms": metrics.latency_p50_ms,
                     "latency_p95_ms": metrics.latency_p95_ms,
                     "train_time_s": train_time_s,

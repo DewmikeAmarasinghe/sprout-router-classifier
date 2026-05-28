@@ -45,42 +45,38 @@ class IndustryKey(StrEnum):
 
 class ScenarioKey(StrEnum):
     """
-    Routing signal scenarios (9 total).
+    Routing signal scenarios (2 total).
 
     label=0 eligible (only if language is PURE_ENGLISH):
-        SIMPLE_TRANSACTIONAL, NAMED_LOCATION
+        SIMPLE_TRANSACTIONAL — ALL routine queries for the industry cell.
+            This includes simple named-place lookups like "Is the Kandy branch open Sunday?"
+            because gpt-4o-mini handles direct lookups fine. The model learns that a
+            Sri Lankan place name alone does NOT trigger routing to gpt-4o.
 
-    always label=1:
-        LOCATION_PROXIMITY, LOCATION_RELATIVE, COMPLEX_TASK,
-        SENSITIVE_CONTEXT, ESCALATION, RESPONSE_LANGUAGE, CONTINUATION
+    always label=1 (even in pure English — requires spatial proximity reasoning):
+        LOCATION_PROXIMITY — User needs to find the nearest/closest place,
+            or needs spatial distance awareness between two Sri Lankan locations.
+            e.g. "What is the nearest branch to me?"
+                 "Which outlet closest to Colombo 3 has this dress in stock?"
+                 "I am in Galle, where is the closest Vision Care?"
+            gpt-4o-mini cannot reason about Sri Lankan geography / proximity.
     """
 
     SIMPLE_TRANSACTIONAL = auto()
-    NAMED_LOCATION = auto()
     LOCATION_PROXIMITY = auto()
-    LOCATION_RELATIVE = auto()
-    COMPLEX_TASK = auto()
-    SENSITIVE_CONTEXT = auto()
-    ESCALATION = auto()
-    RESPONSE_LANGUAGE = auto()
-    CONTINUATION = auto()
 
 
-LABEL_0_SCENARIOS: frozenset[ScenarioKey] = frozenset(
-    {
-        ScenarioKey.SIMPLE_TRANSACTIONAL,
-        ScenarioKey.NAMED_LOCATION,
-    }
-)
+LABEL_0_SCENARIOS: frozenset[ScenarioKey] = frozenset({ScenarioKey.SIMPLE_TRANSACTIONAL})
 
-ALWAYS_LABEL_1_SCENARIOS: frozenset[ScenarioKey] = frozenset(set(ScenarioKey) - LABEL_0_SCENARIOS)
+ALWAYS_LABEL_1_SCENARIOS: frozenset[ScenarioKey] = frozenset({ScenarioKey.LOCATION_PROXIMITY})
 
 
 def resolve_label(language: LanguageKey, scenario: ScenarioKey) -> int:
     """Return the correct training label for a (language, scenario) pair.
 
-    Returns 1 if the scenario always needs gpt-4o, or if the language is
-    code-mixed (Singlish/Tanglish). Returns 0 only for pure English + simple intent.
+    Returns 1 if spatial proximity reasoning is needed (location_proximity), or if
+    the language is code-mixed (gpt-4o-mini degrades on Singlish/Tanglish).
+    Returns 0 only for pure English + simple transactional (any routine query).
     """
     if scenario in ALWAYS_LABEL_1_SCENARIOS:
         return 1

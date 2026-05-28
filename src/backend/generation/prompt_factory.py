@@ -45,8 +45,8 @@ YOUR TASK:
   Each batch must cover DIFFERENT situations — avoid repeating similar queries.
 
 Binary router labels:
-  label=0 → gpt-4o-mini  (pure English, simple, no complexity signals)
-  label=1 → gpt-4o       (Unicode mixed, complex, sensitive, needs spatial/emotional reasoning)\
+  label=0 → gpt-4o-mini  (pure English + ANY routine query, including simple named-place lookups)
+  label=1 → gpt-4o       (code-mixed language, OR spatial proximity reasoning required)\
 """
 
 # Real Sri Lankan locations injected for location-heavy scenarios.
@@ -64,7 +64,9 @@ SRI_LANKAN_LOCATIONS = """\
   ❌ Never invent fictional places: "City Park", "Cross Street", "River Bridge", "Grand Mosque junction"\
 """
 
-SCENARIOS_WITH_SUBTYPES: frozenset[ScenarioKey] = frozenset({ScenarioKey.CONTINUATION})
+# Sri Lankan location guidance injected only for proximity queries (label=1).
+# Simple named-place lookups fall under simple_transactional — no location block needed.
+LOCATION_SCENARIOS: frozenset[ScenarioKey] = frozenset({ScenarioKey.LOCATION_PROXIMITY})
 
 
 class PromptFactory:
@@ -124,20 +126,12 @@ def assemble_prompt(
         build_length_section(sc_cfg),
     ]
 
-    if scenario in SCENARIOS_WITH_SUBTYPES:
-        sections.append(build_subtype_section(scenario, language))
-
     if examples:
         sections.append(build_examples_section(language, industry, scenario, examples))
 
     sections.append(build_anti_scenarios_section(sc_cfg))
 
-    # Add location guidance for location-specific scenarios
-    if scenario in (
-        ScenarioKey.NAMED_LOCATION,
-        ScenarioKey.LOCATION_PROXIMITY,
-        ScenarioKey.LOCATION_RELATIVE,
-    ):
+    if scenario in LOCATION_SCENARIOS:
         sections.append(SRI_LANKAN_LOCATIONS)
 
     sections.append(build_output_rules(language, industry, scenario, platform_style))
@@ -217,36 +211,6 @@ def build_length_section(sc_cfg: ScenarioConfig) -> str:
     return "\n".join(lines)
 
 
-def build_subtype_section(scenario: ScenarioKey, language: LanguageKey) -> str:
-    if scenario == ScenarioKey.CONTINUATION:
-        return build_continuation_subtype(language)
-    return ""
-
-
-def build_continuation_subtype(language: LanguageKey) -> str:
-    """Build continuation sub-type section using clarification_examples from LanguageConfig.
-
-    Reads from LANGUAGE_CONFIGS[language].clarification_examples — no hardcoded dict.
-
-    CRITICAL: Sub-type A = PREVIOUS SERVICE ACTION failed (payment, order, upgrade, booking).
-    Never "The bot failed" or "Your chat froze" — the SERVICE failed, not the chatbot.
-    """
-    lang_cfg = LANGUAGE_CONFIGS[language]
-    clarif = [f'"{ex}"' for ex in lang_cfg.clarification_examples[:4]]
-    clarif_str = ", ".join(clarif)
-    lang_label = language.replace("_", " ")
-    return (
-        "── SUB-TYPE MIX ──\n"
-        "  ~55% type A — PREVIOUS SERVICE ACTION FAILED:\n"
-        "    A service action (payment, booking, order, upgrade) failed — user follows up.\n"
-        '    e.g. "still shows error", "tried again same problem", "payment keeps failing"\n'
-        "    ❌ NEVER: 'The bot failed', 'Your chat froze', 'The AI is broken'\n\n"
-        f"  ~45% type B — UNCLEAR INTENT / CLARIFICATION ({lang_label}):\n"
-        f"    Very short unclear message or asking to re-explain — in {lang_label}.\n"
-        f'    e.g. {clarif_str}, "I didn\'t get that", "can you explain again?"'
-    )
-
-
 def build_examples_section(
     language: LanguageKey,
     industry: IndustryKey,
@@ -256,7 +220,7 @@ def build_examples_section(
     numbered = "\n".join(f'  {i + 1}. "{ex}"' for i, ex in enumerate(examples))
     return (
         f"── EXAMPLES FOR {language}×{industry}×{scenario} ──\n"
-        f"  (vary phrasing significantly — do NOT copy verbatim)\n"
+        f"  (vary phrasing AND sentence structure significantly — do NOT copy or reuse these templates)\n"
         f"{numbered}"
     )
 
@@ -298,39 +262,36 @@ def build_output_rules(
         "── OUTPUT RULES (read carefully before generating) ──\n\n"
         "Before generating each message, think:\n"
         "  - Would a real Sri Lankan customer actually type this to this business?\n"
-        "  - Is this different from what I already generated this session?\n"
+        "  - Is this different in structure (not just words) from what I already generated?\n"
         "  - Does this follow every rule below?\n\n"
         f"Each 'text' must be a probable message a real customer sends to a Sprout\n"
         f"chatbot ({lang_display} × {ind_display} × {sc_display}).\n\n"
         "ABSOLUTE RULES:\n\n"
-        "  RULE 1: Output the raw message text ONLY. No prefix, label, number, or annotation.\n"
-        '    ❌ "label=1 Nearest campus?"        ← label prefix\n'
-        '    ❌ "Seed 3: 1-6 words:"             ← seed prefix\n'
-        '    ❌ "Escalation 14: Not happy"        ← escalation prefix\n'
-        '    ❌ "Generate a message about..."     ← meta-instruction\n'
-        '    ❌ "A customer asking about..."      ← description, not message\n'
-        "    ✅ \"My order hasn't arrived, it's been 3 days.\"\n\n"
-        "  RULE 2: Vary how messages begin — do NOT start every message with the same word.\n"
-        "    Real customers open messages many different ways. Mix:\n"
-        '    • Questions:   "Can I track my parcel?", "Is COD available?"\n'
-        '    • Commands:    "Cancel my order", "Send me the receipt"\n'
-        '    • Statements:  "My payment failed again", "Still no update"\n'
-        '    • Greetings:   "Hi, I need help with...", "Good morning"\n'
-        '    • Short bursts: "Status?", "Price?", "hi", "ok"\n'
-        '    ❌ All 50 messages starting with "Enna," or "I want" or "Hi,"\n\n'
-        "  RULE 3: Continuation = mid-conversation follow-up. NOT a bot/AI complaint.\n"
-        '    ❌ "The bot failed again."  ❌ "Your chat froze."  ❌ "AI broke."\n'
-        '    ✅ "Payment keeps failing."  ✅ "Tried again, same error."\n\n'
-        "  RULE 4: Use real Sri Lankan place names only — never invent fictional locations.\n"
-        "    You may use any real place in Sri Lanka, not just the examples listed above.\n"
-        '    ❌ "City Park", "Cross Street", "River Bridge"  (fictional — never use)\n'
-        '    ✅ "Majestic City branch?", "Near Kandy City Centre?", or any real place\n\n'
-        "  RULE 5: Vary reference IDs — never repeat the same format pattern:\n"
-        "    ❌ SH7777, SH8888, SH9999\n"
-        "    ✅ SH-1234, TRK-001, #45678, P-209, REF/2024/001, ORD-5K\n\n"
-        "  RULE 6: Write casual chat language, not formal prose.\n"
+        "  RULE 1: Output the raw message text ONLY — no prefix, label, number, annotation,\n"
+        "    or description. The JSON value must be exactly what a customer would type.\n"
+        '    ❌ "label=1 Nearest campus?"   ❌ "Generate a message about..."   '
+        '❌ "A customer asking about..."\n\n'
+        "  RULE 2: Vary how messages begin. Do not open most messages with the same phrase.\n"
+        '    Especially avoid leading with "I\'m in...", "Nearest...", "Which branch...",\n'
+        '    or "From [place]...". Real customers mix:\n'
+        '    • Questions:    "Can I track my parcel?"  "Is COD available?"\n'
+        '    • Commands:     "Cancel my order"  "Send me the receipt"\n'
+        '    • Statements:   "My payment failed again"  "Still no update"\n'
+        '    • Greetings:    "Hi, need help with..."  "Good morning"\n'
+        '    • Short bursts: "Status?"  "Price?"  "hi"\n'
+        "    At most 5 messages per batch may share the same opening word or phrase.\n\n"
+        "  RULE 3: Vary the entire sentence shape — not just the noun or place inside a fixed\n"
+        "    template. Each message should feel written by a different person.\n"
+        "    No more than 5 messages per batch from any single grammatical skeleton.\n\n"
+        "  RULE 4: Every message in the batch must be unique from all others in the batch\n"
+        "    AND from all previous batches in this session.\n\n"
+        "  RULE 5: Use real Sri Lankan place names only — never invent fictional locations.\n"
+        "    You may use any real place in Sri Lanka beyond the examples listed above.\n"
+        '    ❌ "City Park"  ❌ "Cross Street"  ❌ "River Bridge"  (fictional — never use)\n\n'
+        "  RULE 6: Vary reference IDs — never repeat the same ID format across messages.\n"
+        "    ❌ SH7777, SH8888, SH9999   ✅ SH-1234, TRK-001, #45678, P-209, ORD-5K\n\n"
+        "  RULE 7: Write casual chat language, not formal prose. Occasional typos are fine.\n"
         '    ❌ "The checkout process exhibits persistent failure requiring escalation."\n'
         '    ✅ "It keeps failing when I try to pay."\n\n'
-        '  Occasional typos are fine (1–2 per batch): e.g. "stil shows error"\n\n'
         f'Return ONLY this JSON: {{"prompts": [{{"text": "..."}}]}}'
     )

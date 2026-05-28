@@ -5,18 +5,10 @@ All values are read via settings_manager.get("KEY").
 Sensitive values (API keys, DB passwords) go in .env — never here.
 
 PAUSE TUNING:
-    PAUSE_AFTER_N_CELLS=2 means all worker threads block before their next API
-    call after every 2 cells complete. In-flight calls finish normally (responses
-    already in transit arrive); only NEW outgoing calls are gated.
-
-    At 7 workers, 2 cells typically complete every ~20-40s. Combined with a 90s
-    pause this gives ~2 min of breathing room per cycle — enough for the 200k
-    TPM window to reset between bursts of concurrent multi-turn calls.
-
-    The 429 storms visible in logs happen when large cells (20+ turns) run
-    simultaneously and accumulate token usage. Pausing every 2 cells catches
-    pressure before it snowballs. The while-loop generator recovers failed turns
-    automatically — occasional 429s do not cause permanent row loss.
+    PAUSE_AFTER_N_TURNS=3: all worker threads block before their next API
+    call after every 3 API turns total (across all workers combined).
+    Each turn generates ~75 rows, so a pause fires roughly every 225 rows.
+    This creates a 100s cooldown, preventing TPM storms from large batches.
 """
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
@@ -28,7 +20,7 @@ GENERATION_BATCH_SIZE = 50  # messages requested per API call / turn
 
 # ── Generation concurrency and rate-limit protection ──────────────────────────
 MAX_GENERATION_WORKERS = 10  # hard cap — ThreadPoolExecutor max_workers
-PAUSE_AFTER_N_CELLS = 2  # pause all workers after every N cells complete
+PAUSE_AFTER_N_TURNS = 3  # pause all workers after every N API turns (batches of ~75 rows)
 CHECKPOINT_PAUSE_SECONDS = 90  # seconds to pause (all workers blocked) per cycle
 CHECKPOINT_EVERY = 500  # write checkpoint.csv every ~N new rows
 

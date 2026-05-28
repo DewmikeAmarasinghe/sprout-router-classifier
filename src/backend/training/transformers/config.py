@@ -81,7 +81,7 @@ TRANSFORMER_REGISTRY: dict[str, TransformerSpec] = {
 
 TRAIN_CONFIG: dict[str, int | float | bool | str] = {
     "max_length": 64,
-    "num_train_epochs": 3,
+    "num_train_epochs": 5,
     "per_device_train_batch_size": 32,
     "per_device_eval_batch_size": 64,
     "learning_rate": 2e-5,
@@ -107,7 +107,7 @@ TRAIN_CONFIG: dict[str, int | float | bool | str] = {
 HPO_SEARCH_SPACE: dict[str, tuple] = {
     "learning_rate": ("float_log", 1e-5, 5e-5),
     "per_device_train_batch_size": ("categorical", [16, 32, 64]),
-    "num_train_epochs": ("categorical", [2, 3, 5]),
+    "num_train_epochs": ("categorical", [3, 4, 5, 6]),
     "warmup_ratio": ("float", 0.0, 0.10),
     "weight_decay": ("categorical", [0.0, 0.01, 0.1]),
     "max_length": ("categorical", [64, 128]),

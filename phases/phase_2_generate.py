@@ -47,6 +47,8 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
     datefmt="%H:%M:%S",
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 from backend.config.keys import IndustryKey, LanguageKey, ScenarioKey
 from backend.generation.generator import MAX_WORKERS, GeneratorService
@@ -78,6 +80,13 @@ def main() -> None:
         default=MAX_WORKERS,
         help=f"Worker threads (default {MAX_WORKERS}). Use 6 for --fill-gaps runs.",
     )
+    parser.add_argument(
+        "--cells",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Stop after completing N cells. Run again later (or --fill-gaps) to continue.",
+    )
     args = parser.parse_args()
 
     if args.workers > MAX_WORKERS:
@@ -106,6 +115,7 @@ def main() -> None:
             scenario=scenario,
             resume=args.resume,
             max_workers=args.workers,
+            max_cells=args.cells,
         )
 
 

@@ -52,7 +52,11 @@ CSV_FIELDS = ["text", "language", "industry", "scenario", "label", "word_count"]
 CHECKPOINT_FILE = "checkpoint.csv"
 RAW_OUTPUT_FILE = "generated_raw.csv"
 MAX_WORKERS = 10
-MAX_TURNS_PER_CELL = 60
+MAX_TURNS_PER_CELL = 100
+# Keep only this many recent (user, assistant) turn pairs in the conversation
+# history. The system prompt always stays. This prevents context rot — the model
+# copying from its own 500+ message history instead of generating new content.
+MAX_HISTORY_TURNS = 3
 
 generation_pause = threading.Event()
 generation_pause.set()
@@ -64,11 +68,11 @@ generation_pause.set()
 CONTINUE_USER_MSG = (
     "━━━ Batch {turn} | Progress: {generated}/{target} messages | This batch: {n} ━━━\n\n"
     "Generate exactly {n} MORE unique customer messages for this cell.\n\n"
-    "Strict requirements:\n"
-    "  - Raw messages only — exact text a customer would type, not a description or instruction\n"
-    "  - Vary lengths: mix short (1-8 words), medium (9-25 words), some long (26+ words)\n"
-    "  - Zero repetition from previous batches in this session\n"
-    "  - Stay strictly within the language × industry × scenario shown in your system context\n\n"
+    "  - Raw message text only — exactly what a customer would type\n"
+    "  - Every message in this batch must be unique from each other AND from previous batches\n"
+    "  - Vary sentence structure — don't reuse the same grammatical template\n"
+    "  - Mix lengths as shown in the system prompt (follow the length distribution guide)\n"
+    "  - Stay within the language × industry × scenario in your system context\n\n"
     'Return ONLY: {{"prompts": [{{"text": "..."}}]}}'
 )
 
@@ -96,13 +100,15 @@ class GeneratorService:
         scenario: ScenarioKey | None = None,
         resume: bool = False,
         max_workers: int = MAX_WORKERS,
+        max_cells: int | None = None,
         on_progress: Callable[[str], None] | None = None,
     ) -> None:
         """Generate training data for all matching distribution cells.
 
         Args:
-            resume: Skip ALL cells in checkpoint.csv even if underfilled.
-                    Use only after Ctrl+C. For rate-limit gaps, use fill_gaps().
+            resume:    Skip cells already in checkpoint.csv (even if underfilled).
+            max_cells: Stop after completing this many cells. Run again (or --fill-gaps)
+                       to continue with the remaining ones.
         """
         max_workers = min(max_workers, MAX_WORKERS)
         raw_dir = get_dataset_path(dataset_name) / "raw"
@@ -115,18 +121,25 @@ class GeneratorService:
         existing_rows: list[dict] = []
         completed_ids: set[str] = set()
 
-        if resume and checkpoint_path.exists():
+        if checkpoint_path.exists():
             existing_rows, completed_ids = load_checkpoint(checkpoint_path)
-            msg = f"Resumed: {len(existing_rows):,} rows, {len(completed_ids)} cells skipped"
-            log.info(msg)
-            if on_progress:
-                on_progress(msg)
+            if completed_ids:
+                msg = f"Skipping {len(completed_ids)} already-completed cells"
+                log.info(msg)
+                if on_progress:
+                    on_progress(msg)
 
         cells_to_run = [c for c in cells if c.cell_id not in completed_ids]
         if not cells_to_run:
+            msg = "All cells already complete."
+            log.info(msg)
             if on_progress:
-                on_progress("All cells already complete.")
+                on_progress(msg)
             return
+
+        if max_cells is not None:
+            cells_to_run = cells_to_run[:max_cells]
+            log.info(f"--cells {max_cells}: running {len(cells_to_run)} cells this session")
 
         run_cells(
             cells_to_run=cells_to_run,
@@ -234,15 +247,14 @@ def run_cells(
     max_workers: int,
     on_progress: Callable[[str], None] | None,
 ) -> None:
-    pause_n = settings_manager.get("PAUSE_AFTER_N_CELLS")
+    pause_n = settings_manager.get("PAUSE_AFTER_N_TURNS")
     pause_secs = settings_manager.get("CHECKPOINT_PAUSE_SECONDS")
-    cp_every = settings_manager.get("CHECKPOINT_EVERY")
     total = len(cells_to_run)
 
     start_msg = (
         f"Starting {total} cells | workers={max_workers} | "
         f"target: {sum(c.target_count for c in cells_to_run):,} rows | "
-        f"pause {pause_secs}s every {pause_n} cells"
+        f"pause {pause_secs}s every {pause_n} API turns"
     )
     log.info(start_msg)
     if on_progress:
@@ -253,32 +265,69 @@ def run_cells(
     all_rows: list[dict] = list(existing_rows)
     rows_lock = threading.Lock()
     cells_done = 0
+    cell_row_counts: dict[str, int] = {}
+    # Single-element lists so closures can mutate without nonlocal.
+    turns_done = [0]
+    last_pause_at = [0]  # turns_done value when the last pause was claimed
+    pause_lock = threading.Lock()  # only one worker executes a pause at a time
+
+    def make_on_rows(cell_id: str) -> Callable[[list[dict]], None]:
+        """Batch callback: appends rows to checkpoint every turn, pauses every pause_n turns.
+
+        Cascading-pause prevention: each worker claims a pause slot by advancing
+        last_pause_at under rows_lock, but only the first to win pause_lock actually
+        sleeps. Others skip — the next pause fires pause_n turns later.
+        """
+
+        def on_rows(batch_rows: list[dict]) -> None:
+            do_pause = False
+            with rows_lock:
+                all_rows.extend(batch_rows)
+                cell_row_counts[cell_id] = cell_row_counts.get(cell_id, 0) + len(batch_rows)
+                if batch_rows:
+                    append_to_checkpoint(batch_rows, checkpoint_path)
+                turns_done[0] += 1
+                if turns_done[0] - last_pause_at[0] >= pause_n:
+                    last_pause_at[0] = turns_done[0]
+                    do_pause = True
+
+            if do_pause and pause_lock.acquire(blocking=False):
+                try:
+                    pause_msg = f"  ⏸ {turns_done[0]} API turns — pausing {pause_secs}s"
+                    log.info(pause_msg)
+                    if on_progress:
+                        on_progress(pause_msg)
+                    generation_pause.clear()
+                    time.sleep(pause_secs)
+                    generation_pause.set()
+                    log.info("  ▶ Resuming generation...")
+                    if on_progress:
+                        on_progress("  ▶ Resuming generation...")
+                finally:
+                    pause_lock.release()
+
+        return on_rows
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(generate_cell_in_thread, cell): cell for cell in cells_to_run}
+        futures = {
+            executor.submit(generate_cell_in_thread, cell, make_on_rows(cell.cell_id)): cell
+            for cell in cells_to_run
+        }
 
         for future in as_completed(futures):
             cell = futures[future]
             try:
-                cell_id, new_rows = future.result()
+                cell_id = future.result()
                 with rows_lock:
-                    all_rows.extend(new_rows)
                     cells_done += 1
-
+                    cell_rows = cell_row_counts.get(cell_id, 0)
                     msg = (
                         f"[{cells_done}/{total}] {cell_id} "
-                        f"({len(new_rows)} rows, total={len(all_rows):,})"
+                        f"({cell_rows} rows, total={len(all_rows):,})"
                     )
                     log.info(msg)
                     if on_progress:
                         on_progress(msg)
-
-                    if cells_done % max(1, cp_every // 200) == 0:
-                        write_csv(all_rows, checkpoint_path)
-                        ckpt = f"  ↳ Checkpoint: {len(all_rows):,} rows"
-                        log.info(ckpt)
-                        if on_progress:
-                            on_progress(ckpt)
 
             except Exception as exc:  # noqa: BLE001
                 cells_done += 1
@@ -286,22 +335,6 @@ def run_cells(
                 log.error(err)
                 if on_progress:
                     on_progress(err)
-
-            if cells_done % pause_n == 0 and cells_done < total:
-                pause_msg = (
-                    f"  ⏸ {cells_done} cells done — pausing {pause_secs}s "
-                    f"(all {max_workers} workers block before next API call)"
-                )
-                log.info(pause_msg)
-                if on_progress:
-                    on_progress(pause_msg)
-
-                generation_pause.clear()
-                time.sleep(pause_secs)
-                generation_pause.set()
-
-                if on_progress:
-                    on_progress("  ▶ Resuming generation...")
 
     seen: set[str] = set()
     deduped: list[dict] = [
@@ -319,16 +352,21 @@ def run_cells(
         on_progress(done_msg)
 
 
-def generate_cell_in_thread(cell: GenerationCell) -> tuple[str, list[dict]]:
+def generate_cell_in_thread(
+    cell: GenerationCell,
+    on_rows: Callable[[list[dict]], None],
+) -> str:
+    """Generate rows for a cell, streaming each batch via on_rows. Returns cell_id."""
     client: Any = instructor.from_openai(OpenAI())
-    rows = run_cell_turns(client, cell, set())
-    return cell.cell_id, rows
+    run_cell_turns(client, cell, set(), on_rows)
+    return cell.cell_id
 
 
 def run_cell_turns(
     client: Any,
     cell: GenerationCell,
     seen_texts: set[str],
+    on_rows: Callable[[list[dict]], None] | None = None,
 ) -> list[dict]:
     """Multi-turn generation loop with clear system+user message split.
 
@@ -399,11 +437,24 @@ def run_cell_turns(
             )
             messages.append({"role": "assistant", "content": batch.model_dump_json()})
 
+            # Sliding window: keep system prompt + last MAX_HISTORY_TURNS (user, assistant) pairs.
+            # Prevents context rot — model copying its own 500+ message history verbatim.
+            max_msgs = 1 + MAX_HISTORY_TURNS * 2
+            if len(messages) > max_msgs:
+                messages = [messages[0]] + messages[-MAX_HISTORY_TURNS * 2 :]
+
+            batch_rows: list[dict] = []
+            n_empty = 0
+            n_dupes = 0
             for p in batch.prompts:
                 text = p.text.strip()
-                if not text or text in seen_texts:
+                if not text:
+                    n_empty += 1
                     continue
-                rows.append(
+                if text in seen_texts:
+                    n_dupes += 1
+                    continue
+                batch_rows.append(
                     {
                         "text": text,
                         "language": cell.language,
@@ -414,6 +465,17 @@ def run_cell_turns(
                     }
                 )
                 seen_texts.add(text)
+
+            rows.extend(batch_rows)
+            if on_rows:
+                on_rows(batch_rows)
+
+            pct = len(rows) / cell.target_count * 100
+            log.info(
+                f"  {cell.cell_id}: turn {turn_idx + 1}"
+                f" | gen={len(batch.prompts)} empty={n_empty} dupes={n_dupes} +{len(batch_rows)}"
+                f" | {len(rows)}/{cell.target_count} ({pct:.0f}%)"
+            )
 
         except Exception as exc:  # noqa: BLE001
             log.warning(f"  {cell.cell_id} turn {turn_idx + 1} failed: {exc!s:.200}")
@@ -440,6 +502,17 @@ def write_csv(rows: list[dict], path: Path) -> None:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def append_to_checkpoint(batch_rows: list[dict], path: Path) -> None:
+    """Append a single batch to checkpoint.csv (write header only if file is new/empty)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not path.exists() or path.stat().st_size == 0
+    with path.open("a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        if write_header:
+            writer.writeheader()
+        writer.writerows(batch_rows)
 
 
 def load_checkpoint(path: Path) -> tuple[list[dict], set[str]]:

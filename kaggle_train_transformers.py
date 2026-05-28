@@ -7,16 +7,21 @@ Pipeline:
     Cell  3  Install dependencies
     Cell  4  [OFF] Data generation (phases 1-4 — uncomment only when regenerating dataset)
     Cell  5  Verify training data  +  define run_model()
-    Cell  6  Phase 5 — Classical ML training          (CPU, ~30 min)
-    Cell  7  Phase 6 — xlmr-base transformer          (~50 min on T4)
+    Cell  6  Phase 5 — Classical ML training          (CPU, ~60-90 min)
+    Cell  7  Phase 6 — xlmr-base transformer          (~80 min on T4 @ 5 epochs)
     Cell  8  Phase 6 — papluca transformer
     Cell  9  Phase 6 — muril transformer
     Cell 10  Phase 6 — mbert transformer
-    Cell 11  Phase 6 — xlmr-large transformer         (~100 min on T4)
+    Cell 11  Phase 6 — xlmr-large transformer         (~160 min on T4 @ 5 epochs)
     Cell 12  Phase 7 — Evaluate all models
     Cell 13  Phase 8 — Router threshold tuning
     Cell 14  Output summary
     Cell 15  Download results
+
+DATASET: v4 (50/50 label=0/label=1, 2 scenarios: simple_transactional + named_location)
+EPOCHS:  5 (was 3). With 50/50 balance and only 2 scenarios, the distinction is more
+         nuanced (named_location in pure_english looks superficially like simple_transactional).
+         load_best_model_at_end=True ensures early stopping with no accuracy penalty.
 
 REPO path: /kaggle/working/sprout-router-classifier (matches path_resolver.py).
 
@@ -62,27 +67,17 @@ if torch.cuda.is_available():
 # Clones to /kaggle/working/sprout-router-classifier — matches path_resolver.py exactly.
 
 # %%
-try:
-    from kaggle_secrets import UserSecretsClient
-
-    pat = UserSecretsClient().get_secret("GITHUB_PAT")
-except ImportError:
-    pat = os.environ.get("GITHUB_PAT", "")
-
 REPO = "/kaggle/working/sprout-router-classifier"
 DATASET_VERSION = "v1"
-
-url = f"https://oauth2:{pat}@github.com/DewmikeAmarasinghe/sprout-router-classifier.git"
-pat = ""
+REPO_URL = "https://github.com/DewmikeAmarasinghe/sprout-router-classifier.git"
 
 if os.path.exists(f"{REPO}/.git"):
     print("Repo exists — pulling latest...")
     subprocess.run(["git", "-C", REPO, "pull", "--rebase"], check=True)
 else:
     print("Cloning repo...")
-    subprocess.run(["git", "clone", url, REPO], check=True)
+    subprocess.run(["git", "clone", REPO_URL, REPO], check=True)
 
-url = ""
 print(f"✅ Repo ready at {REPO}")
 
 # %% [markdown]
@@ -121,6 +116,7 @@ print("✅ Dependencies installed via uv")
 #   Generates distribution plots and statistics to data/eda_plots/.
 
 # %%
+# from kaggle_secrets import UserSecretsClient
 # openai_key = UserSecretsClient().get_secret("OPENAI_API_KEY")
 # _gen_env = {**os.environ, "PYTHONPATH": f"{REPO}/src", "OPENAI_API_KEY": openai_key}
 # openai_key = ""
@@ -254,7 +250,7 @@ print(
 #
 # XLM-RoBERTa base (278M params, 1,000 MB, min 8 GB VRAM).
 # Best for Sinhala — empirically verified (U. of Moratuwa 2022).
-# Full fine-tuning: all weights, 3 epochs, lr=2e-5. ~50 min on Kaggle T4.
+# Full fine-tuning: all weights, 5 epochs, lr=2e-5. ~80 min on Kaggle T4.
 
 # %%
 run_model("xlmr-base")
@@ -291,7 +287,8 @@ run_model("mbert")
 # ## Cell 11 — Phase 6: xlmr-large
 #
 # XLM-RoBERTa large (560M params, 2,200 MB, min 12 GB VRAM).
-# 24-layer; 4× compute of base. Run after base models to see if the ceiling justifies the cost.
+# 24-layer; 4× compute of base. Run after base models to see if the ceiling justifies cost.
+# 5 epochs × 4× compute = ~160 min on T4. Consider --no-hpo to stay within session time.
 
 # %%
 run_model("xlmr-large")

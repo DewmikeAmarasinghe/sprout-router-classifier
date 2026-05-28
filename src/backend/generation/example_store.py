@@ -8,7 +8,6 @@ EXAMPLE QUALITY REQUIREMENTS (enforced in _generate_via_api):
   - Plain message text only — no "label=X", "Seed N:", or any prefix
   - Real Sri Lankan locations only
   - Varied formats, realistic messages a customer would actually send
-  - For CONTINUATION: mid-conversation follow-ups, NOT bot/AI complaints
 """
 
 from __future__ import annotations
@@ -131,26 +130,15 @@ class ExampleStore:
         ind_cfg = INDUSTRY_CONFIGS[industry]
         sc_cfg = SCENARIO_CONFIGS[scenario]
 
-        # Build scenario-specific guidance
-        continuation_note = ""
-        if scenario == ScenarioKey.CONTINUATION:
-            continuation_note = (
-                "\n  IMPORTANT: Sub-type A = PREVIOUS SERVICE ACTION failed (payment, order, upgrade, "
-                "booking), NOT the chatbot/AI/bot itself."
-                '\n  ❌ "The bot failed" ❌ "Your chat froze" ✅ "Payment keeps failing when I try"\n'
-            )
-
         location_note = ""
-        if scenario in (
-            ScenarioKey.NAMED_LOCATION,
-            ScenarioKey.LOCATION_PROXIMITY,
-            ScenarioKey.LOCATION_RELATIVE,
-        ):
+        if scenario == ScenarioKey.LOCATION_PROXIMITY:
             location_note = (
                 "\n  Use ONLY real Sri Lankan places: Colombo, Kandy, Galle, Negombo, Matara, "
                 "Jaffna, Kurunegala, Nuwara Eliya, Fort, Pettah, Kollupitiya, Bambalapitiya, "
                 "Nugegoda, Maharagama, Majestic City, Liberty Plaza, One Galle Face, Odel.\n"
                 "  ❌ Never invent: 'City Park', 'Cross Street', 'River Bridge'\n"
+                "  Include both named-location lookups ('Does Kandy branch open Sunday?') AND\n"
+                "  proximity queries ('nearest branch to me', 'any store near Galle?').\n"
             )
 
         prompt = (
@@ -161,7 +149,6 @@ class ExampleStore:
             f"  Scenario:  {sc_cfg.display_name} — {sc_cfg.description}\n"
             f"  Lengths:   {sc_cfg.length_dist.to_prompt_str()}\n"
             f"  Platform:  {ind_cfg.typical_platform}\n"
-            f"{continuation_note}"
             f"{location_note}\n"
             "ABSOLUTE OUTPUT RULES:\n"
             "  1. Output the raw message text ONLY. Never prefix or annotate.\n"

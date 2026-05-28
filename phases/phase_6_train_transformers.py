@@ -9,7 +9,7 @@ What exactly happens during training:
   All parameters are trained with AdamW (lr=2e-5, weight_decay=0.01).
   The low lr prevents catastrophic forgetting of pre-trained language knowledge
   while adapting the model to our routing classification task.
-  3 epochs with load_best_model_at_end=True acts as implicit early stopping.
+  5 epochs with load_best_model_at_end=True — best checkpoint is always restored.
 
 Auto-HPO:
   After each training run, if recall_1 < PRODUCTION_RECALL_THRESHOLD, Optuna HPO runs automatically
@@ -23,7 +23,6 @@ Usage:
     python phases/phase_6_train_transformers.py --dataset v1 --model xlmr-base
     python phases/phase_6_train_transformers.py --dataset v1 --model xlmr-base --no-hpo
     python phases/phase_6_train_transformers.py --dataset v1 --all
-    python phases/phase_6_train_transformers.py --dataset v1 --model xlmr-base --export-onnx
     python phases/phase_6_train_transformers.py --dataset v1 --model xlmr-base --hpo --n-trials 10
 """
 
@@ -133,16 +132,6 @@ def main() -> None:
         default=5,
         help="Optuna HPO trials (default 5). Each trial = full training run.",
     )
-    parser.add_argument(
-        "--export-onnx",
-        action="store_true",
-        help="Export trained checkpoint(s) to ONNX after training.",
-    )
-    parser.add_argument(
-        "--quantize",
-        action="store_true",
-        help="Apply INT8 quantization during ONNX export (requires --export-onnx).",
-    )
     args = parser.parse_args()
 
     if not args.all and not args.model:
@@ -170,17 +159,6 @@ def main() -> None:
                         f"Running auto-HPO ({args.n_trials} trials)..."
                     )
                 run_auto_hpo(args.dataset, args.model, args.n_trials)
-
-    if args.export_onnx:
-        from backend.training.transformers.onnx_exporter import OnnxExporter
-
-        exporter = OnnxExporter()
-        for r in results:
-            exporter.export(
-                dataset_name=r.dataset_name,
-                model_key=r.experiment_id,
-                quantize=args.quantize,
-            )
 
 
 if __name__ == "__main__":

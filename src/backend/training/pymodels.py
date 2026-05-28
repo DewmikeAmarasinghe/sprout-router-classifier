@@ -19,20 +19,20 @@ from pydantic import BaseModel, Field
 
 
 class MetricsResult(BaseModel):
-    """All evaluation metrics for one experiment."""
+    """Core evaluation metrics for one experiment.
 
-    accuracy: float = 0.0
-    precision_0: float = 0.0
+    Key production metric: recall_1 >= PRODUCTION_RECALL_THRESHOLD.
+    Never route a complex/location/code-mixed message to gpt-4o-mini.
+    """
+
+    recall_1: float = 0.0
     precision_1: float = 0.0
     recall_0: float = 0.0
-    recall_1: float = 0.0
+    precision_0: float = 0.0
     f1_macro: float = 0.0
-    f1_weighted: float = 0.0
-    mcc: float = 0.0  # Matthews Correlation Coefficient
+    mcc: float = 0.0
     roc_auc: float = 0.0
-    pr_auc: float = 0.0
     log_loss: float = 0.0
-    ece: float = 0.0  # Expected Calibration Error
 
     latency_mean_ms: float = 0.0
     latency_p50_ms: float = 0.0

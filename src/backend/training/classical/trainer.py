@@ -26,6 +26,7 @@ from typing import Any
 import mlflow
 import pandas as pd
 
+from backend.evaluation.plots import plot_confusion_matrix, plot_roc_curve
 from backend.shared.metrics import compute_all_metrics, time_inference
 from backend.shared.path_resolver import get_dataset_path, get_experiment_path
 from backend.shared.settings_manager import settings_manager
@@ -115,6 +116,9 @@ class ClassicalMLTrainer:
             log.warning(
                 f"  ⚠️  recall_1 = {metrics.recall_1:.4f} < {float(settings_manager.get('PRODUCTION_RECALL_THRESHOLD'))} — not production-safe"
             )
+
+        plot_confusion_matrix(y_val, y_pred, models_dir, title=experiment_id)
+        plot_roc_curve(y_val, y_proba, metrics.roc_auc, models_dir, title=experiment_id)
 
         model_path = models_dir / "model.pkl"
         with model_path.open("wb") as f:
@@ -215,13 +219,10 @@ def log_to_mlflow(
                     "precision_1": metrics.precision_1,
                     "recall_0": metrics.recall_0,
                     "precision_0": metrics.precision_0,
+                    "f1_macro": metrics.f1_macro,
                     "mcc": metrics.mcc,
                     "roc_auc": metrics.roc_auc,
-                    "pr_auc": metrics.pr_auc,
-                    "f1_macro": metrics.f1_macro,
                     "log_loss": metrics.log_loss,
-                    "ece": metrics.ece,
-                    "accuracy": metrics.accuracy,
                     "latency_p50_ms": metrics.latency_p50_ms,
                     "latency_p95_ms": metrics.latency_p95_ms,
                 }

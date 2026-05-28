@@ -43,7 +43,6 @@ def cmd_clean(args: argparse.Namespace) -> None:
       experiments/{dataset}/router/         — threshold_curve.json
       experiments/{dataset}/master_comparison.csv
       experiments/{dataset}/cost_simulation.json
-      experiments/{dataset}/error_analysis.json
       mlruns/                               — MLflow artifact store
       mlflow.db                             — MLflow SQLite backend
       catboost_info/                        — CatBoost training logs (written to cwd)
@@ -59,7 +58,6 @@ def cmd_clean(args: argparse.Namespace) -> None:
         exp_root / "router",
         exp_root / "master_comparison.csv",
         exp_root / "cost_simulation.json",
-        exp_root / "error_analysis.json",
         PROJECT_ROOT / "mlruns",
         PROJECT_ROOT / "mlflow.db",
         PROJECT_ROOT / "catboost_info",
