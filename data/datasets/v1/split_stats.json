@@ -1,54 +1,54 @@
 {
   "dataset_name": "v1",
   "train": {
-    "rows": 39862,
-    "label_0": 16180,
+    "rows": 47156,
+    "label_0": 23474,
     "label_1": 23682,
-    "label_1_ratio": 0.594,
+    "label_1_ratio": 0.502,
     "scenarios": {
-      "simple_transactional": 27413,
+      "simple_transactional": 34707,
       "location_proximity": 12449
     },
     "languages": {
-      "pure_english": 20969,
-      "singlish_light": 9527,
-      "singlish_heavy": 4676,
-      "tanglish_light": 3263,
-      "tanglish_heavy": 1427
+      "pure_english": 28286,
+      "singlish_light": 9468,
+      "singlish_heavy": 4730,
+      "tanglish_light": 3310,
+      "tanglish_heavy": 1362
     }
   },
   "val": {
-    "rows": 4983,
-    "label_0": 2022,
+    "rows": 5895,
+    "label_0": 2934,
     "label_1": 2961,
-    "label_1_ratio": 0.594,
+    "label_1_ratio": 0.502,
     "scenarios": {
-      "simple_transactional": 3426,
+      "simple_transactional": 4338,
       "location_proximity": 1557
     },
     "languages": {
-      "pure_english": 2624,
-      "singlish_light": 1148,
-      "singlish_heavy": 620,
-      "tanglish_light": 430,
-      "tanglish_heavy": 161
+      "pure_english": 3534,
+      "singlish_light": 1175,
+      "singlish_heavy": 572,
+      "tanglish_light": 394,
+      "tanglish_heavy": 220
     }
   },
   "test": {
-    "rows": 4983,
-    "label_0": 2023,
+    "rows": 5895,
+    "label_0": 2935,
     "label_1": 2960,
-    "label_1_ratio": 0.594,
+    "label_1_ratio": 0.502,
     "scenarios": {
-      "simple_transactional": 3427,
+      "simple_transactional": 4339,
       "location_proximity": 1556
     },
     "languages": {
-      "pure_english": 2595,
-      "singlish_light": 1158,
-      "singlish_heavy": 611,
-      "tanglish_light": 436,
-      "tanglish_heavy": 183
+      "pure_english": 3486,
+      "singlish_light": 1190,
+      "singlish_heavy": 605,
+      "tanglish_light": 425,
+      "tanglish_heavy": 189
     }
   }
 }

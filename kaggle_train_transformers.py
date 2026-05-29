@@ -7,12 +7,12 @@ Pipeline:
     Cell  3  Install dependencies
     Cell  4  [OFF] Data generation (phases 1-4 — uncomment only when regenerating dataset)
     Cell  5  Verify training data  +  define run_model()
-    Cell  6  Phase 5 — Classical ML training          (CPU, ~60-90 min)
+    Cell  6  Phase 5 — Classical ML training          (CPU, ~30 min, ACTIVE_COMBOS only)
     Cell  7  Phase 6 — xlmr-base transformer          (~80 min on T4 @ 5 epochs)
     Cell  8  Phase 6 — papluca transformer
     Cell  9  Phase 6 — muril transformer
     Cell 10  Phase 6 — mbert transformer
-    Cell 11  Phase 6 — xlmr-large transformer         (~160 min on T4 @ 5 epochs)
+    Cell 11  Phase 6 — xlmr-large transformer         [OFF — commented out]
     Cell 12  Phase 7 — Evaluate all models
     Cell 13  Phase 8 — Router threshold tuning
     Cell 14  Output summary
@@ -213,10 +213,10 @@ def run_model(model_key: str) -> int:
 
 
 # %% [markdown]
-# ## Cell 6 — Phase 5: Classical ML training  (CPU, ~60-90 min)
+# ## Cell 6 — Phase 5: Classical ML training  (CPU, ~30 min)
 #
-# Trains all 25 classical combinations (5 vectorizers × 5 classifiers).
-# Use --all-active instead for the curated 14-combo subset (~30 min).
+# Trains ACTIVE_COMBOS only (14 curated vectorizer × classifier pairs).
+# Use --all for all 25 combinations (~60-90 min).
 #
 # Auto-HPO runs on the best passing model (highest MCC among recall_1 ≥ threshold).
 # Results saved to experiments/{DATASET}/classical/models/{experiment_id}/result.json
@@ -226,7 +226,7 @@ def run_model(model_key: str) -> int:
 print(f"\n[before classical] Disk: {disk_usage()}", flush=True)
 
 proc_classical = subprocess.Popen(
-    [sys.executable, f"{REPO}/phases/phase_5_train_classical.py", "--all"],
+    [sys.executable, f"{REPO}/phases/phase_5_train_classical.py", "--all-active"],
     cwd=REPO,
     env=SUBPROCESS_ENV,
     stdout=subprocess.PIPE,
@@ -284,11 +284,11 @@ run_model("muril")
 run_model("mbert")
 
 # %% [markdown]
-# ## Cell 11 — Phase 6: xlmr-large
+# ## Cell 11 — Phase 6: xlmr-large  [OFF]
 #
 # XLM-RoBERTa large (560M params, 2,200 MB, min 12 GB VRAM).
-# 24-layer; 4× compute of base. Run after base models to see if the ceiling justifies cost.
-# 5 epochs × 4× compute = ~160 min on T4. Consider --no-hpo to stay within session time.
+# 24-layer; 4× compute of base. Uncomment when you want to compare against base models.
+# 5 epochs × 4× compute = ~160 min on T4.
 
 # %%
 run_model("xlmr-large")

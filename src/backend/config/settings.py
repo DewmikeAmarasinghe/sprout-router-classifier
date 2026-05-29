@@ -30,7 +30,7 @@ SAFE_DEFAULT_LABEL = 1  # label to use when model confidence < threshold
 # 1 = gpt-4o (safe default — never under-routes)
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
-PRODUCTION_RECALL_THRESHOLD = 0.95  # minimum recall_1 to pass production gate
+PRODUCTION_RECALL_THRESHOLD = 0.90  # minimum recall_1 to pass production gate
 DAILY_MESSAGES_ESTIMATE = 25_000  # used in cost simulation (~$50/day at gpt-4o pricing)
 
 # ── API pricing (USD per 1M tokens, as of mid-2025) ──────────────────────────

@@ -1,23 +1,23 @@
 {
   "dataset_name": "v1",
-  "train_rows": 39862,
-  "val_rows": 4983,
-  "test_rows": 4983,
-  "label_0_count": 16180,
+  "train_rows": 47156,
+  "val_rows": 5895,
+  "test_rows": 5895,
+  "label_0_count": 23474,
   "label_1_count": 23682,
-  "label_0_pct": 40.59,
-  "label_1_pct": 59.41,
-  "mean_word_count": 8.48,
-  "median_word_count": 8.0,
+  "label_0_pct": 49.78,
+  "label_1_pct": 50.22,
+  "mean_word_count": 8.53,
+  "median_word_count": 9.0,
   "languages": {
-    "pure_english": 20969,
-    "singlish_light": 9527,
-    "singlish_heavy": 4676,
-    "tanglish_light": 3263,
-    "tanglish_heavy": 1427
+    "pure_english": 28286,
+    "singlish_light": 9468,
+    "singlish_heavy": 4730,
+    "tanglish_light": 3310,
+    "tanglish_heavy": 1362
   },
   "scenarios": {
-    "simple_transactional": 27413,
+    "simple_transactional": 34707,
     "location_proximity": 12449
   }
 }

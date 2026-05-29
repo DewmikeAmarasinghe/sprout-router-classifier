@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import pickle
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -94,7 +95,8 @@ class RouterPredictor:
 
         log.info(f"Loaded model from {pkl_path}")
 
-        with pkl_path.open("rb") as f:
+        with pkl_path.open("rb") as f, warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Trying to unpickle estimator")
             bundle = pickle.load(f)
 
         if isinstance(bundle, dict) and "vectorizer" in bundle and "classifier" in bundle:
@@ -111,7 +113,7 @@ class RouterPredictor:
         if not ckpt.exists():
             raise FileNotFoundError(f"Checkpoint not found: {ckpt}")
 
-        tokenizer = AutoTokenizer.from_pretrained(str(ckpt))
+        tokenizer = AutoTokenizer.from_pretrained(str(ckpt), fix_mistral_regex=True)
         model = AutoModelForSequenceClassification.from_pretrained(str(ckpt))
         model.eval()
         log.info(f"Loaded HF checkpoint from {ckpt}")
